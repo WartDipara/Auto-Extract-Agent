@@ -1,0 +1,33 @@
+name: agent-ida
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - ida-pro-mcp==2.0.0
+      - idapro==0.0.9
+      - capstone==5.0.7
+      - androguard==4.1.4
+      - pycryptodome==3.23.0
+      - cryptography==48.0.1
+      - lz4==4.4.5
+      - zstandard==0.25.0
+      - xxtea-py==1.0.3
+      - lxml==6.1.1
+      - lupa==2.8
+      - dnfile==0.18.0
+      - pefile==2024.8.26
+      - pyelftools==0.33
+      - pillow==12.2.0
+      - UnityPy==1.25.0
+      - texture2ddecoder==1.0.6
+      - requests==2.34.0
+      - numpy==2.3.5
+      - orjson==3.11.8
+      - PyYAML==6.0.2
+      - python-dotenv==1.2.2
+      - watchdog==6.0.0
+      - pydantic==2.13.4
+      - protobuf==7.35.1
+      - tqdm==4.67.3

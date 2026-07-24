@@ -1,0 +1,54 @@
+model:
+  default: MiniMax-M3
+  provider: custom:ai.14x.cn
+  base_url: ''
+agent:
+  max_turns: 60
+  verbose: false
+  reasoning_effort: high
+terminal:
+  backend: local
+  cwd: .
+  timeout: 180
+browser:
+  inactivity_timeout: 120
+  allow_private_urls: true
+display:
+  language: zh-hant
+  streaming: true
+compression:
+  enabled: true
+memory:
+  memory_enabled: true
+delegation:
+  max_iterations: 50
+approvals:
+  mode: 'off'
+security:
+  allow_private_urls: true
+streaming:
+  enabled: false
+
+# ── 工具路径 ──
+tools:
+  assetstudio: "C:\\Users\\rayyi\\Desktop\\unityTools\\AssetStudioNet10V241\\AssetStudio.CLI.exe"
+  il2cppdumper: "C:\\Users\\rayyi\\Desktop\\unityTools\\il2cppdumper\\Il2CppDumper.exe"
+  il2cppdumper_config: "C:\\Users\\rayyi\\Desktop\\unityTools\\il2cppdumper\\config.json"
+
+# ── MCP Servers ──
+mcp_servers:
+  idalib:
+    command: conda
+    args: ["run", "-n", "agent-ida", "idalib-mcp", "--stdio"]
+    timeout: 300
+
+# ── Custom providers ──
+custom_providers:
+  - name: Ai.14x.cn
+    base_url: https://ai.14x.cn/hub/coding/v1
+    api_key: your_api_key_here
+    model: ark/glm-5.2
+    models:
+      - MiniMax-M3
+      - deepseek-v4-flash
+      - deepseek/deepseek-v4-flash
