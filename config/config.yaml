@@ -1,7 +1,14 @@
+# ══════════════════════════════════════════════════════════
+#  Hermes-Auto-Extract 主配置
+#  修改后运行 .\sync.ps1 写入 hermes-home/ 即可生效
+#  （模型、provider、skills 由 Hermes 自己从 hermes-home/ 读取）
+# ══════════════════════════════════════════════════════════
+
 model:
-  default: MiniMax-M3
-  provider: custom:ai.14x.cn
-  base_url: ''
+  default: MiniMax-M3            # 模型名
+  provider: custom:ai.14x.cn     # provider 名
+  base_url: ''                   # 自定义 base_url（可选）
+
 agent:
   max_turns: 60
   verbose: false

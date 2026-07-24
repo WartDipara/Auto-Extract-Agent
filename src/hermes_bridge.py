@@ -1,6 +1,8 @@
 import datetime
 import logging
+import os
 import queue
+import re
 import shutil
 import subprocess
 import threading
@@ -8,18 +10,40 @@ import time
 from pathlib import Path
 
 import config
+from apk_meta import sanitize_label_for_filename
 
 _log = logging.getLogger(__name__)
 
 _SEP = "=" * 60
+_ANSI_RE = re.compile(
+    r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
+)
 
 
 def _clear_apks():
     config.HERMES_APKS_DIR.mkdir(parents=True, exist_ok=True)
-    for path in config.HERMES_APKS_DIR.glob("*"):
-        if path.is_file():
-            path.unlink()
-            _log.info("removed apk: %s", path.name)
+    for path in list(config.HERMES_APKS_DIR.iterdir()):
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                _log.info("removed apk entry: %s", path.name)
+            elif path.is_dir():
+                shutil.rmtree(path)
+                _log.info("removed apk dir: %s", path.name)
+        except OSError as exc:
+            _log.error("cannot remove %s: %s", path, exc)
+
+
+def ensure_workspace_clean() -> bool:
+    """任务开始/结束时检查并清空 apks 工作区。返回是否曾有残留。"""
+    config.HERMES_APKS_DIR.mkdir(parents=True, exist_ok=True)
+    leftovers = list(config.HERMES_APKS_DIR.iterdir())
+    if not leftovers:
+        return False
+    names = ", ".join(p.name for p in leftovers)
+    _log.warning("apks workspace not empty before clean: %s", names)
+    _clear_apks()
+    return True
 
 
 def _csv_path_for_apk(apk_name: str) -> Path:
@@ -42,6 +66,34 @@ def _safe_write(fp, text: str):
         pass
 
 
+def _decode_stdout_bytes(data: bytes) -> str:
+    if not data:
+        return ""
+    for encoding in ("utf-8", "gbk", "cp936"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _escape_for_log(text: str) -> str:
+    text = _ANSI_RE.sub("", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "\n" or ch == "\t":
+            out.append(ch)
+        elif code < 32 or code == 127:
+            out.append(f"\\x{code:02x}")
+        elif 0x80 <= code <= 0x9F:
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _csv_footer_status(csv_path: Path) -> str:
     if not csv_path.is_file():
         return "否"
@@ -51,6 +103,8 @@ def _csv_footer_status(csv_path: Path) -> str:
     status = classify_csv(text)
     if status == "decrypt_failed":
         return "是, 解密失败"
+    if status == "abnormal_exit":
+        return "是, 异常退出"
     return "是, 成功"
 
 
@@ -63,7 +117,7 @@ def _open_task_log(apk_name: str):
     try:
         config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         path = _log_path_for_apk(apk_name)
-        return path, path.open("w", encoding="utf-8")
+        return path, path.open("w", encoding="utf-8-sig", newline="\n")
     except OSError as exc:
         _log.error("cannot open task log for %s: %s", apk_name, exc)
         return None, None
@@ -71,8 +125,11 @@ def _open_task_log(apk_name: str):
 
 def _stream_stdout(proc: subprocess.Popen, line_queue: queue.Queue):
     try:
-        for line in proc.stdout:
-            line_queue.put(line)
+        while True:
+            raw = proc.stdout.readline()
+            if raw == b"":
+                break
+            line_queue.put(_escape_for_log(_decode_stdout_bytes(raw)))
     finally:
         line_queue.put(None)
 
@@ -89,12 +146,74 @@ def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
     return csv_path
 
 
+def write_abnormal_exit_csv(apk_name: str, reason: str = "") -> Path:
+    config.HERMES_OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = _csv_path_for_apk(apk_name)
+    detail = reason or "Hermes 进程已结束但未产出 CSV"
+    csv_path.write_text(
+        f"text\n{config.ABNORMAL_EXIT_TEXT}（{detail}）\n",
+        encoding="utf-8-sig",
+    )
+    _log.info("wrote abnormal-exit csv: %s", csv_path)
+    return csv_path
+
+
+def csv_has_content(apk_name: str) -> bool:
+    csv_path = _csv_path_for_apk(apk_name)
+    if not csv_path.is_file():
+        return False
+    text = csv_path.read_text(encoding="utf-8-sig", errors="replace").strip()
+    return bool(text)
+
+
+def ensure_csv_after_hermes(apk_name: str, returncode: int) -> Path:
+    """Hermes 退出后若无 CSV，立即写入异常退出标记；不做长时间空等。"""
+    if csv_has_content(apk_name):
+        return _csv_path_for_apk(apk_name)
+    deadline = time.monotonic() + config.CSV_GRACE_SEC
+    while time.monotonic() < deadline:
+        if csv_has_content(apk_name):
+            return _csv_path_for_apk(apk_name)
+        time.sleep(0.5)
+    if returncode != 0:
+        reason = f"Hermes 非零退出 exit={returncode}，未产出 CSV"
+    else:
+        reason = "Hermes 对话提前结束（进程已退出），未产出 CSV"
+    return write_abnormal_exit_csv(apk_name, reason=reason)
+
+
+def read_session_id_from_log(apk_name: str) -> str:
+    log_path = _log_path_for_apk(apk_name)
+    if not log_path.is_file():
+        return ""
+    try:
+        text = log_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    for pattern in (
+        r"hermes --resume\s+(\S+)",
+        r"Session:\s+(\S+)",
+        r"CLI cleanup calling memory shutdown for session\s+(\S+)",
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
 def place_apk(apk_path: Path) -> Path:
-    _clear_apks()
+    ensure_workspace_clean()
     dest = config.HERMES_APKS_DIR / apk_path.name
     shutil.move(str(apk_path), str(dest))
     _log.info("placed apk: %s", dest)
     return dest
+
+
+def _hermes_env() -> dict:
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
 
 
 def invoke_hermes(apk_name: str) -> subprocess.CompletedProcess:
@@ -104,16 +223,22 @@ def invoke_hermes(apk_name: str) -> subprocess.CompletedProcess:
     timed_out = False
     stdout_chunks: list[str] = []
     log_path, log_fp = _open_task_log(apk_name)
+    workspace = str(config.HERMES_ROOT.resolve())
+    agent_home = os.environ.get("HERMES_HOME", "(unset)")
 
-    _log.info("invoking hermes: %s", " ".join(config.HERMES_CMD))
+    _log.info(
+        "invoking hermes: %s (HERMES_HOME=%s cwd=%s)",
+        " ".join(config.HERMES_CMD),
+        agent_home,
+        workspace,
+    )
     proc = subprocess.Popen(
         config.HERMES_CMD,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        encoding="utf-8",
-        errors="replace",
+        bufsize=0,
+        cwd=workspace,
+        env=_hermes_env(),
     )
 
     _safe_write(
@@ -244,20 +369,25 @@ def clean_result_csv(text: str) -> tuple[str, str]:
 
 def classify_csv(text: str) -> str:
     stripped = text.strip()
-    if stripped == config.DECRYPT_FAIL_TEXT or stripped.startswith(
-        config.DECRYPT_FAIL_TEXT
-    ):
-        return "decrypt_failed"
+    markers = (
+        (config.ABNORMAL_EXIT_TEXT, "abnormal_exit"),
+        (config.DECRYPT_FAIL_TEXT, "decrypt_failed"),
+    )
+    for marker, status in markers:
+        if stripped == marker or stripped.startswith(marker):
+            return status
     for line in stripped.splitlines():
         cell = line.strip()
-        if cell == config.DECRYPT_FAIL_TEXT or cell.startswith(config.DECRYPT_FAIL_TEXT):
-            return "decrypt_failed"
+        for marker, status in markers:
+            if cell == marker or cell.startswith(marker):
+                return status
     return "success"
 
 
-def archive_csv(csv_path: Path, task_id: str, body_text: str) -> Path:
+def archive_csv(csv_path: Path, apk_stem: str, label: str, body_text: str) -> Path:
     config.RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    dest = config.RESULT_DIR / f"{task_id}_{csv_path.name}"
+    safe_label = sanitize_label_for_filename(label)
+    dest = config.RESULT_DIR / f"{apk_stem}_{safe_label}.csv"
     dest.write_text(body_text, encoding="utf-8-sig")
     if csv_path.is_file():
         csv_path.unlink()
@@ -272,17 +402,14 @@ def append_session_to_log(apk_name: str, session_id: str):
     if not log_path.is_file():
         return
     try:
-        with log_path.open("a", encoding="utf-8") as fp:
+        with log_path.open("a", encoding="utf-8", newline="\n") as fp:
             fp.write(f" Session: {session_id}\n")
     except OSError as exc:
         _log.error("cannot append session to log %s: %s", log_path, exc)
 
 
-def cleanup_apk(apk_name: str):
-    target = config.HERMES_APKS_DIR / apk_name
-    if target.is_file():
-        target.unlink()
-        _log.info("cleaned apk: %s", apk_name)
-    for path in config.HERMES_APKS_DIR.glob("*.apk"):
-        path.unlink()
-        _log.info("cleaned leftover apk: %s", path.name)
+def cleanup_apk(apk_name: str = ""):
+    """清空 Hermes apks 工作区（含 apk 文件与解包残留目录）。"""
+    _ = apk_name
+    ensure_workspace_clean()
+    _log.info("cleaned hermes apks workspace")

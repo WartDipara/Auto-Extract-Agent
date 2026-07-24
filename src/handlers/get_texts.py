@@ -6,6 +6,7 @@ from pathlib import Path
 
 import config
 import queue_manager
+from apk_meta import extract_labels, primary_label
 from downloader import download
 from hermes_bridge import (
     append_session_to_log,
@@ -13,8 +14,11 @@ from hermes_bridge import (
     classify_csv,
     clean_result_csv,
     cleanup_apk,
+    ensure_csv_after_hermes,
+    ensure_workspace_clean,
     invoke_hermes,
     place_apk,
+    read_session_id_from_log,
     wait_for_csv,
 )
 from models import Task
@@ -54,13 +58,23 @@ def _ensure_apk(task: Task) -> Path:
     if task.status == "downloaded" and task.filename:
         local = config.DOWNLOADS_DIR / task.filename
         if local.is_file():
+            if not task.labels:
+                labels = extract_labels(local)
+                queue_manager.update_task(
+                    task.task_id,
+                    labels=labels,
+                    label=primary_label(labels),
+                )
             return local
     queue_manager.update_task(task.task_id, status="downloading")
     apk_path = download(task.url)
+    labels = extract_labels(apk_path)
     queue_manager.update_task(
         task.task_id,
         status="downloaded",
         filename=apk_path.name,
+        labels=labels,
+        label=primary_label(labels),
     )
     return apk_path
 
@@ -76,8 +90,10 @@ def _other_hermes_busy(task_id: str) -> str | None:
 
 def _process_task(task: Task):
     task_id = task.task_id
+    ensure_workspace_clean()
     apk_path = _ensure_apk(task)
     filename = apk_path.name
+    label = task.label or ""
 
     busy = _other_hermes_busy(task_id)
     if busy is not None:
@@ -98,19 +114,15 @@ def _process_task(task: Task):
             result.returncode,
             (result.stderr or result.stdout or "").strip(),
         )
-        cleanup_apk(filename)
-        queue_manager.update_task(
-            task_id,
-            status="failed",
-            error=f"hermes exit {result.returncode}",
-        )
-        return
 
     queue_manager.update_task(task_id, status="waiting_csv")
-    csv_path, text = wait_for_csv(filename)
+    ensure_csv_after_hermes(filename, result.returncode)
+    csv_path, text = wait_for_csv(filename, timeout_sec=config.CSV_GRACE_SEC)
     status = classify_csv(text)
     body_text, session_id = clean_result_csv(text)
-    archived = archive_csv(csv_path, task_id, body_text)
+    if not session_id:
+        session_id = read_session_id_from_log(filename)
+    archived = archive_csv(csv_path, Path(filename).stem, label, body_text)
     append_session_to_log(filename, session_id)
     cleanup_apk(filename)
     updated = queue_manager.update_task(
@@ -118,13 +130,15 @@ def _process_task(task: Task):
         status=status,
         result_csv=str(archived),
         session_id=session_id,
+        error="" if status == "success" else body_text.strip().splitlines()[0],
     )
     if updated is not None:
         queue_manager.append_session_record(updated)
     _log.info(
-        "task %s done status=%s session=%s",
+        "task %s done status=%s label=%s session=%s",
         task_id,
         status,
+        label or "-",
         session_id or "-",
     )
 

@@ -9,6 +9,7 @@ STATUSES = (
     "waiting_csv",
     "success",
     "decrypt_failed",
+    "abnormal_exit",
     "failed",
     "timeout",
 )
@@ -20,6 +21,8 @@ class Task:
     url: str
     source_file: str = ""
     filename: str = ""
+    labels: dict = field(default_factory=dict)
+    label: str = ""
     status: str = "queued"
     error: str = ""
     result_csv: str = ""

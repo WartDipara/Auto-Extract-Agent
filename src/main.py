@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -7,6 +8,7 @@ _SRC = Path(__file__).resolve().parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+import config
 from config import ensure_dirs
 from handlers.get_texts import ensure_worker, handle_get_texts
 from inbox_watcher import scan_existing, start_watcher
@@ -23,6 +25,14 @@ def _setup_logging():
     )
 
 
+def _log_hermes_paths():
+    _log.info(
+        "Hermes agent HOME=%s | task workspace=%s",
+        os.environ.get("HERMES_HOME", "(unset)"),
+        config.HERMES_ROOT.resolve(),
+    )
+
+
 def _register_routes():
     register("get-texts", handle_get_texts)
 
@@ -30,6 +40,7 @@ def _register_routes():
 def main():
     _setup_logging()
     ensure_dirs()
+    _log_hermes_paths()
     queue_manager.load()
     _register_routes()
     ensure_worker()

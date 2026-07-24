@@ -1,9 +1,9 @@
 # ── Runtime  ──
-inbox/
-downloads/
-result/
-logs/
-state/
+inbox/*
+downloads/*
+result/*
+logs/*
+state/*
 !inbox/.gitkeep
 !downloads/.gitkeep
 !result/.gitkeep
