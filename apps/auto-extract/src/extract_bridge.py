@@ -57,6 +57,8 @@ def _csv_footer_status(csv_path: Path) -> str:
     status = classify_csv(text)
     if status == "decrypt_failed":
         return "是, 解密失败"
+    if status == "assets_missing":
+        return "是, 资源缺失"
     if status == "abnormal_exit":
         return "是, 异常退出"
     return "是, 成功"
@@ -523,19 +525,37 @@ def _apply_sensitive_filter() -> int:
 
 def _resume_quality_gate(mgr, apk_name, snap, task_key, run_fn):
     """
-    Before archive: sensitive-word filter, then line-count + garbled checks.
-    Failures resume same OpenCode session (garbled first, then too_few).
+    Sensitive filter, then empty / garbled / too_few gates.
+    empty → classify_empty once; too_few/garbled → quality resumes.
     """
-    from csv_quality import check_csv_quality
+    from csv_quality import check_csv_quality, match_terminal_status
 
-    # Always filter before any quality count / archive, even if resume disabled.
     _apply_sensitive_filter()
+
+    if not mgr.lookup_session_id(task_key):
+        _log.error("no session_id for quality resume task=%s", task_key)
+        return
+
+    text = _read_tests_csv_text()
+    issue = check_csv_quality(text)
+    if issue is None:
+        print("csv quality ok", flush=True)
+        return
+
+    if issue.kind == "empty":
+        _resume_empty_classify(apk_name, snap, run_fn)
+        text = _read_tests_csv_text()
+        if match_terminal_status(text) is not None:
+            return
+        issue = check_csv_quality(text)
+        if issue is None:
+            print("csv quality ok after empty classify", flush=True)
+            return
+        if issue.kind == "empty":
+            return
 
     max_n = max(0, int(config.OPENCODE_QUALITY_RESUME_MAX))
     if max_n <= 0:
-        return
-    if not mgr.lookup_session_id(task_key):
-        _log.error("no session_id for quality resume task=%s", task_key)
         return
 
     for i in range(1, max_n + 1):
@@ -544,6 +564,9 @@ def _resume_quality_gate(mgr, apk_name, snap, task_key, run_fn):
         issue = check_csv_quality(text)
         if issue is None:
             print("csv quality ok", flush=True)
+            return
+        if issue.kind == "empty":
+            _resume_empty_classify(apk_name, snap, run_fn)
             return
 
         kind = (
@@ -573,19 +596,60 @@ def _resume_quality_gate(mgr, apk_name, snap, task_key, run_fn):
     _apply_sensitive_filter()
     text = _read_tests_csv_text()
     issue = check_csv_quality(text)
-    if issue is not None:
+    if issue is None:
+        print("csv quality ok after resume", flush=True)
+        return
+    if issue.kind == "empty":
+        _resume_empty_classify(apk_name, snap, run_fn)
+        return
+    print(
+        f"csv quality still failing after {max_n} resumes: {issue.detail}; "
+        "proceed with current csv",
+        flush=True,
+    )
+    _log.warning(
+        "csv quality unresolved kind=%s detail=%s",
+        issue.kind,
+        issue.detail,
+    )
+
+
+def _resume_empty_classify(apk_name, snap, run_fn):
+    """Ask OpenCode once to write assets_missing or decrypt_failed; else force decrypt fail."""
+    from csv_quality import check_csv_quality, match_terminal_status
+
+    if match_terminal_status(_read_tests_csv_text()) is not None:
+        print("csv empty classified as terminal marker", flush=True)
+        return
+
+    max_n = max(0, int(config.OPENCODE_EMPTY_CLASSIFY_MAX))
+    for i in range(1, max_n + 1):
+        issue = check_csv_quality(_read_tests_csv_text())
+        if issue is None or issue.kind != "empty":
+            return
+        prompt = build_opencode_resume_prompt("classify_empty", apk_name, snap)
         print(
-            f"csv quality still failing after {max_n} resumes: {issue.detail}; "
-            "proceed with current csv",
+            f"opencode classify_empty resume {i}/{max_n}: {issue.detail}",
             flush=True,
         )
-        _log.warning(
-            "csv quality unresolved kind=%s detail=%s",
-            issue.kind,
-            issue.detail,
+        run_fn(
+            f"classify_empty_{i}",
+            prompt,
+            force_new=False,
+            skill=None,
+            use_stall=False,
         )
-    else:
-        print("csv quality ok after resume", flush=True)
+        _apply_sensitive_filter()
+        if match_terminal_status(_read_tests_csv_text()) is not None:
+            print("csv empty classified as terminal marker", flush=True)
+            return
+
+    if match_terminal_status(_read_tests_csv_text()) is not None:
+        return
+    issue = check_csv_quality(_read_tests_csv_text())
+    if issue is not None and issue.kind == "empty":
+        write_decrypt_fail_csv(apk_name, reason="空结果未声明原因")
+        print("csv empty forced decrypt_failed after classify_empty", flush=True)
 
 
 def invoke_extract_agent(apk_name: str, *, task_root: Path) -> subprocess.CompletedProcess:
@@ -608,20 +672,10 @@ def wait_for_csv(apk_name: str, timeout_sec: float | None = None) -> tuple[Path,
 
 
 def classify_csv(text: str) -> str:
-    stripped = text.strip()
-    markers = (
-        (config.ABNORMAL_EXIT_TEXT, "abnormal_exit"),
-        (config.DECRYPT_FAIL_TEXT, "decrypt_failed"),
-    )
-    for marker, status in markers:
-        if stripped == marker or stripped.startswith(marker):
-            return status
-    for line in stripped.splitlines():
-        cell = line.strip()
-        for marker, status in markers:
-            if cell == marker or cell.startswith(marker):
-                return status
-    return "success"
+    from csv_quality import match_terminal_status
+
+    status = match_terminal_status(text)
+    return status if status is not None else "success"
 
 
 def archive_csv(csv_path: Path, apk_stem: str, label: str, body_text: str) -> Path:

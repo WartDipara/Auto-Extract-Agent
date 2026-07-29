@@ -10,6 +10,7 @@ STATUSES = (
     "waiting_csv",
     "success",
     "decrypt_failed",
+    "assets_missing",
     "abnormal_exit",
     "failed",
     "timeout",

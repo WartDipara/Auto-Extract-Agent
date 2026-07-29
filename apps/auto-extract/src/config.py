@@ -22,13 +22,11 @@ RESULT_DIR = APP_ROOT / "result"
 LOGS_DIR = APP_ROOT / "logs"
 STATE_DIR = APP_ROOT / "state"
 PROCESSED_DIR = STATE_DIR / "processed"
-QUEUE_FILE = STATE_DIR / "queue.json"
 SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 
 PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
-PROMPTS_HISTORY_FILE = STATE_DIR / "prompts_history.jsonl"
 
 OPENCODE_CMD = os.environ.get("OPENCODE_CMD", "opencode").strip() or "opencode"
 OPENCODE_SKILL = "get-game-text-skill"
@@ -39,10 +37,12 @@ OPENCODE_MISSING_OUTPUT_MAX = 2
 OPENCODE_QUALITY_RESUME_MAX = int(
     os.environ.get("OPENCODE_QUALITY_RESUME_MAX", "2") or "2"
 )
+OPENCODE_EMPTY_CLASSIFY_MAX = 1
 
 AGENT_TIMEOUT_SEC = 3600
 POLL_INTERVAL_SEC = 2.0
 CSV_GRACE_SEC = 10.0
+ASSETS_MISSING_TEXT = "资源文本文件在assets里找不到"
 DECRYPT_FAIL_TEXT = "解密失败"
 ABNORMAL_EXIT_TEXT = "异常退出"
 CSV_MIN_LINES = int(os.environ.get("CSV_MIN_LINES", "6000") or "6000")

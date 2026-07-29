@@ -50,6 +50,9 @@ def test_opencode_prompt_and_cmd():
     assert eb.opencode_output_csv().name == "tests.csv"
     assert layout["opencode_export"].name == "opencode_session.json"
     assert eb.build_opencode_resume_prompt("stall_continue", apk_name, snap).strip() == "继续"
+    empty = eb.build_opencode_resume_prompt("classify_empty", apk_name, snap)
+    assert config.ASSETS_MISSING_TEXT in empty
+    assert config.DECRYPT_FAIL_TEXT in empty
     too_few = eb.build_opencode_resume_prompt(
         "quality_too_few",
         apk_name,
@@ -67,21 +70,30 @@ def test_opencode_prompt_and_cmd():
         garbled_lines=20,
     )
     assert "提取不完整" in too_few or "太少" in too_few or "下限" in too_few
+    assert "技能" in too_few or "装备" in too_few or "对话" in too_few
     assert str(config.CSV_MIN_LINES) in too_few
     assert "乱码" in garbled
     assert "解密" in garbled
+    assert config.ASSETS_MISSING_TEXT in prompt
+    assert eb.classify_csv(config.ASSETS_MISSING_TEXT) == "assets_missing"
+    assert eb.classify_csv(config.DECRYPT_FAIL_TEXT + "（超时）") == "decrypt_failed"
+    assert eb.classify_csv("text\n真实一行\n") == "success"
     print("prompt chars:", len(prompt), flush=True)
     print("EXTRACT_AGENT_PROMPT_OK", flush=True)
 
 
 def test_csv_quality():
     import config
-    from csv_quality import check_csv_quality, line_looks_garbled
+    from csv_quality import check_csv_quality, line_looks_garbled, match_terminal_status
     from shared.sensitive_words import filter_sensitive_lines
 
     assert line_looks_garbled("bad\ufffdtext")
     assert line_looks_garbled("Ã¤Â¸Â­Ã¦Â–Â‡xx")
     assert not line_looks_garbled("这是正常中文文本")
+
+    assert check_csv_quality("text\n") is not None
+    assert check_csv_quality("text\n").kind == "empty"
+    assert check_csv_quality("") is not None and check_csv_quality("").kind == "empty"
 
     few = "\n".join(f"行{i}" for i in range(10))
     issue = check_csv_quality(few)
@@ -98,6 +110,17 @@ def test_csv_quality():
     assert issue2 is not None and issue2.kind == "garbled"
 
     assert check_csv_quality(config.DECRYPT_FAIL_TEXT) is None
+    assert match_terminal_status(config.DECRYPT_FAIL_TEXT) == "decrypt_failed"
+    assert (
+        match_terminal_status(config.ASSETS_MISSING_TEXT + "（无配表）")
+        == "assets_missing"
+    )
+    assert check_csv_quality(config.ASSETS_MISSING_TEXT) is None
+
+    # Hallucination: marker plus real body → ignore marker
+    halluc = config.ASSETS_MISSING_TEXT + "\n真实任务文本一行\n"
+    assert match_terminal_status(halluc) is None
+    assert check_csv_quality(halluc) is not None
 
     words = frozenset({"色情论坛", "一夜性网", "习"})
     raw = "任务说明\n色情论坛\n正常文本\n一夜性网\n习\n包含色情论坛的长句\n"

@@ -53,30 +53,5 @@ def render(dotted_key: str, **slots: Any) -> str:
         raise KeyError(
             f"missing slot {exc} for prompt {dotted_key}"
         ) from exc
-    record_prompt_history(dotted_key, text, slots)
+    _log.info("prompt rendered key=%s chars=%s", dotted_key, len(text))
     return text
-
-
-def record_prompt_history(
-    dotted_key: str,
-    rendered: str,
-    slots: dict[str, Any] | None = None,
-) -> None:
-    """Append emitted prompt for human review (state/prompts_history.jsonl)."""
-    try:
-        config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "key": dotted_key,
-            "chars": len(rendered),
-            "text": rendered,
-        }
-        if slots:
-            # keep history readable; drop huge values if any
-            payload["slots"] = {
-                k: (str(v) if not isinstance(v, (str, int, float, bool)) else v)
-                for k, v in slots.items()
-            }
-        with config.PROMPTS_HISTORY_FILE.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except OSError as exc:
-        _log.warning("cannot append prompts history: %s", exc)

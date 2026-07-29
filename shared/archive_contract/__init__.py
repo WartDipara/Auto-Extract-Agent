@@ -51,7 +51,6 @@ def auto_extract_paths(repo_root: Path) -> dict[str, Path]:
         "app_root": app,
         "workspace": workspace,
         "state": app / "state",
-        "queue_json": app / "state" / "queue.json",
         "result": app / "result",
         "opencode_sessions": app / "state" / "opencode_sessions.jsonl",
     }

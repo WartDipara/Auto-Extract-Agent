@@ -194,14 +194,20 @@ class OpenCodeSessionManager:
 
     def _append_record(self, rec: SessionRecord):
         config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "task_key": rec.task_key,
-            "session_id": rec.session_id,
-            "exit_code": rec.exit_code,
-        }
-        with self.state_path.open("a", encoding="utf-8") as fp:
-            fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
         self._by_task[rec.task_key] = rec
+        lines = [
+            json.dumps(
+                {
+                    "task_key": r.task_key,
+                    "session_id": r.session_id,
+                    "exit_code": r.exit_code,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for r in self._by_task.values()
+        ]
+        self.state_path.write_text("".join(lines), encoding="utf-8")
         _log.info(
             "opencode session recorded task=%s session=%s exit_code=%s",
             rec.task_key,
