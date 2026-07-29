@@ -1,0 +1,49 @@
+# Auto-Extract-Agent Python dependencies (pip)
+# Usage (prefer inside conda env agent-ida):
+#   conda activate agent-ida
+#   pip install -r requirements.txt
+#
+# Not installable via pip (install separately on new machines):
+#   - Android SDK Build-Tools  -> apksigner, zipalign
+#       typically: %LOCALAPPDATA%\Android\Sdk\build-tools\<ver>\
+#   - JDK                      -> keytool / java
+#   - Android platform-tools   -> adb
+#   - OpenCode CLI             -> opencode
+# OCR models download to the PC on first PaddleOCR use (not to the phone).
+
+# ── Module A runtime ──
+requests==2.34.0
+watchdog==6.0.0
+pillow==12.2.0
+numpy==2.3.5
+PyYAML==6.0.2
+python-dotenv==1.2.2
+pydantic==2.13.4
+protobuf==7.35.1
+tqdm==4.67.3
+orjson==3.11.8
+
+# ── Device prep: UI click + OCR (PC-side) ──
+uiautomator2==3.5.2
+paddlepaddle==3.3.1
+paddleocr==3.7.0
+
+# ── Reverse / asset helpers used by OpenCode skills ──
+androguard==4.1.4
+pycryptodome==3.23.0
+cryptography==48.0.1
+lz4==4.4.5
+zstandard==0.25.0
+xxtea-py==1.0.3
+lxml==6.1.1
+lupa==2.8
+dnfile==0.18.0
+pefile==2024.8.26
+pyelftools==0.33
+capstone==5.0.7
+UnityPy==1.25.0
+texture2ddecoder==1.0.6
+
+# ── IDA Pro MCP (needs IDA Pro + idalib installed; omit if no IDA) ──
+ida-pro-mcp==2.0.0
+idapro==0.0.9
