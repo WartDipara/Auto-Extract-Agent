@@ -1,0 +1,3 @@
+# Source: https://github.com/julKali/makeDebuggable
+# Purpose: binary-patch AndroidManifest.xml android:debuggable without apktool.
+# Local fix: indices.append[i] -> indices.append(i)

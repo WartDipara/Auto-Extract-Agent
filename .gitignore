@@ -1,42 +1,29 @@
-# ── Runtime  ──
-inbox/*
-downloads/*
-result/*
-logs/*
-state/*
-!inbox/.gitkeep
-!downloads/.gitkeep
-!result/.gitkeep
-!logs/.gitkeep
-!state/.gitkeep
+# ── Module A runtime ──
+apps/auto-extract/inbox/*
+apps/auto-extract/downloads/*
+apps/auto-extract/result/*
+apps/auto-extract/logs/*
+apps/auto-extract/state/*
+!apps/auto-extract/inbox/.gitkeep
+!apps/auto-extract/downloads/.gitkeep
+!apps/auto-extract/result/.gitkeep
+!apps/auto-extract/logs/.gitkeep
+!apps/auto-extract/state/.gitkeep
 
-# ── Hermes 运行时工作区 ──
-hermes-home/skills/
-hermes-home/apks/
-hermes-home/outputs/
-hermes-home/work_*/
-hermes-home/logs/
-hermes-home/sessions/
-hermes-home/cache/
-hermes-home/tmp/
-hermes-home/config.yaml
-hermes-home/.env
-hermes-home/**/*.csv
-hermes-home/**/*.apk
-hermes-home/**/*.log
+# ── Workspace (per-task dirs under workspace/<task_key>/) ──
+apps/auto-extract/workspace/*
+!apps/auto-extract/workspace/.gitkeep
 
-# ── 密钥与本地环境 ──
+# ── Secrets ──
 .env
 .env.*
-!**/.env.example
 **/.env
-hermes-home/.env
 *.pem
 *.key
 credentials*.json
 secrets.*
 
-# ── 大型二进制 / 逆向产物 ──
+# ── Binaries ──
 *.apk
 *.aab
 *.ipa
@@ -46,8 +33,6 @@ secrets.*
 *.so
 *.dll
 *.exe
-!setup.ps1
-!launch.ps1
 *.idb
 *.i64
 *.id0
@@ -65,12 +50,10 @@ secrets.*
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -94,7 +77,7 @@ htmlcov/
 .tox/
 .nox/
 
-# ── IDE ──
+# ── IDE / OS ──
 .vscode/
 .idea/
 *.swp
@@ -102,19 +85,20 @@ htmlcov/
 *~
 .cursor/
 !.cursor/rules/
-
-# ── OS ──
 .DS_Store
 Thumbs.db
 Desktop.ini
 ehthumbs.db
 
-# ── 调试 ──
+# ── Debug / local ──
+# Do not use _*.py here — it also matches __init__.py
 _*.txt
 _*.json
-_*.py
 *_check.txt
 *_smoke*.py
 *.log
-!logs/.gitkeep
 balance.py
+tmp/
+记录
+tests/export_workspace/
+tests/test_workspace/*

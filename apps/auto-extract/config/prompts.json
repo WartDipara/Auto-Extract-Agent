@@ -1,0 +1,12 @@
+{
+  "opencode": {
+    "initial": "开始获取文本任务。请先阅读并严格遵循 OpenCode 技能「{skill}」（通过 /skills 或已注入的 skill 命令执行其方法论），再开始分析。整次任务禁止询问用户任何问题，禁止等待确认/澄清/补充信息；所有决策自主完成（引擎判断、加密方式、解密策略、字段筛选、输出格式）；遇阻立即换思路/换工具/换路径，绝不中断等待；用尽合理技术路径，仅全部无效时可写「解密失败」并结束，禁止因初步困难放弃。任务工作区绝对路径：{root}。目录语义（禁止自行询问路径）：decoded={decoded_dir}（约 {decoded_files} 个文件，已是 APK zip 解压结果，勿再 apktool d）；hotfix={hotfix_dir}（约 {hotfix_files} 个文件；子目录 internal_storage=/data/data/.../files，sdcard=Android/data/.../files；可能为空或缺一侧；有则优先于 decoded 裁定，无则仅用 decoded，不得因此停手）；outputs={outputs_dir}（唯一合法最终输出目录）。资源优先级：hotfix/ > decoded/。反路径依赖：每个 APK 当全新逆向题，禁止未经分析直接套用历史密钥/算法。禁止暴力字符串提取：strings/裸 grep 可读串不得作为最终 CSV，须解密/反编译后从结构化数据提取。最终必须写入唯一文件：{tests_csv}（固定文件名 tests.csv；禁止写其他路径/文件名）。【CSV 硬性要求】仅一列纯文本（不要多列/ID/表名）；以文本内容为 key 做 set 去重；多语言优先中文，无中文则英文；用直接写文件方式输出，避免 csv.writer 引号包裹。",
+    "resume": {
+      "stall_continue": "继续",
+      "deadline_persist": "已经一小时了，将目前结论落盘。无论成功或失败，必须立刻用写文件工具写入唯一文件：{tests_csv}（非空）。写完即可结束，禁止提问。",
+      "missing_output": "你已结束本轮，但未在约定路径落盘。无论成功或失败，必须立刻用写文件工具写入唯一文件：{tests_csv}（非空；CSV 单列、set 去重、中文优先否则英文）。禁止只在对话里输出正文；禁止提问；写完即可结束。",
+      "quality_too_few": "质量校验失败：当前 {tests_csv} 仅约 {line_count} 行有效文本，远低于合理下限 {min_lines} 行。说明提取不完整。请继续在 hotfix/decoded 中找配表/翻译表/结构化数据，补全玩家可见中文文本后覆盖写入同一文件 {tests_csv}（单列、set 去重、中文优先）。禁止提问；写完即可结束。",
+      "quality_garbled": "质量校验失败：当前 {tests_csv} 中检测到乱码（约 {garbled_lines}/{line_count} 行可疑）。更可能是解密密钥/算法/编码错误。请先修正解密再重新提取，覆盖写入同一文件 {tests_csv}（单列、set 去重、中文优先、无乱码）。禁止提问；写完即可结束。"
+    }
+  }
+}
