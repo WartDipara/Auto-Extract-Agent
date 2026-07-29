@@ -23,7 +23,9 @@ from models import Task
 from prep import run_device_prep
 from shared.archive_contract import (
     FollowupLockedError,
+    has_stop,
     mark_module_a_done,
+    mark_stop,
     reset_task_workspace,
     task_layout,
     utc_now,
@@ -224,6 +226,22 @@ def _worker_loop():
                 error=str(exc),
             )
         except Exception as exc:
+            from opencode_session import OpenCodeStopped
+
+            if isinstance(exc, OpenCodeStopped):
+                _log.warning("task %s stopped: %s", task.task_id, exc)
+                # Ensure .stop exists so the purge script can reclaim the workspace.
+                task_key = Path(task.filename or "").stem
+                if task_key:
+                    root = config.WORKSPACE_ROOT / task_key
+                    if root.is_dir() and not has_stop(root):
+                        mark_stop(root)
+                queue_manager.update_task(
+                    task.task_id,
+                    status="failed",
+                    error=str(exc),
+                )
+                continue
             _log.exception("task %s failed: %s", task.task_id, exc)
             queue_manager.update_task(
                 task.task_id,

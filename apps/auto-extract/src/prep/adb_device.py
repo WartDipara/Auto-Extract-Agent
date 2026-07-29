@@ -41,7 +41,7 @@ class AdbDevice:
     def shell(self, cmdline: str, timeout: int = 120) -> str:
         return self.run(["shell", cmdline], timeout=timeout)
 
-    def require_one_device(self) -> str:
+    def list_online_devices(self) -> list[str]:
         out = subprocess.run(
             [self.adb, "devices"],
             capture_output=True,
@@ -50,16 +50,18 @@ class AdbDevice:
             errors="replace",
             timeout=30,
         )
-        lines = [
-            ln.strip()
-            for ln in (out.stdout or "").splitlines()
-            if ln.strip() and not ln.startswith("List")
-        ]
-        devices = []
-        for ln in lines:
+        devices: list[str] = []
+        for ln in (out.stdout or "").splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("List"):
+                continue
             parts = ln.split()
             if len(parts) >= 2 and parts[1] == "device":
                 devices.append(parts[0])
+        return devices
+
+    def require_one_device(self) -> str:
+        devices = self.list_online_devices()
         if self.serial:
             if self.serial not in devices:
                 raise RuntimeError(f"ADB_SERIAL={self.serial} not online; online={devices}")

@@ -65,11 +65,6 @@ def run_device_prep(
     layout = task_layout(task_root)
     clear_signed_apks(task_root)
 
-    stage("checking adb device...")
-    adb = AdbDevice(serial=serial or config.ADB_SERIAL or None)
-    serial_used = adb.require_one_device()
-    stage(f"adb device ready {serial_used}")
-
     if apk_path is None:
         apk_path = download(url)
     else:
@@ -88,6 +83,37 @@ def run_device_prep(
         raise RuntimeError("cannot resolve package name from apk")
     stage(f"package {package_name}")
 
+    stage("extracting apk zip -> decoded/ ...")
+    decoded = extract_apk_zip(apk_path, layout["decoded"])
+    stage("decoded extract finished")
+
+    stage("checking adb device...")
+    adb = AdbDevice(serial=serial or config.ADB_SERIAL or None)
+    online = adb.list_online_devices()
+    if not online or (adb.serial and adb.serial not in online):
+        detail = (
+            f"ADB_SERIAL={adb.serial} not online; online={online}"
+            if adb.serial
+            else f"online={online}"
+        )
+        stage(f"no adb device ({detail}); skip debuggable/install/hotfix")
+        layout["hotfix"].mkdir(parents=True, exist_ok=True)
+        return PrepResult(
+            package_name=package_name,
+            apk_stem=stem,
+            original_apk=apk_path,
+            signed_apk=apk_path,
+            decoded_dir=decoded,
+            hotfix_dir=layout["hotfix"],
+            hotfix_has_files=False,
+            pull_source="none",
+            task_root=Path(task_root),
+            screen_reached="no_device",
+        )
+
+    serial_used = adb.require_one_device()
+    stage(f"adb device ready {serial_used}")
+
     stage(f"checking if installed {package_name}")
     if adb.ensure_uninstalled(package_name):
         stage(f"uninstalled existing {package_name}")
@@ -98,10 +124,6 @@ def run_device_prep(
     stage("patching debuggable + signing...")
     make_debuggable_signed_apk(apk_path, signed)
     stage(f"signed apk ready {signed.name}")
-
-    stage("extracting apk zip -> decoded/ ...")
-    decoded = extract_apk_zip(apk_path, layout["decoded"])
-    stage("decoded extract finished")
 
     stage(f"ensuring clean install {package_name}")
     adb.ensure_uninstalled(package_name)

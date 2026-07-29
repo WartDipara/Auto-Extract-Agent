@@ -51,6 +51,12 @@ def main():
             time.sleep(1.0)
     except KeyboardInterrupt:
         _log.info("shutting down")
+        try:
+            from opencode_session import interrupt_active_run
+
+            interrupt_active_run()
+        except Exception as exc:
+            _log.warning("interrupt_active_run failed: %s", exc)
         observer.stop()
         observer.join()
 

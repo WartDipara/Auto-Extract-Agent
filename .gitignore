@@ -101,4 +101,5 @@ balance.py
 tmp/
 记录
 tests/export_workspace/
+tests/interrupt_workspace/
 tests/test_workspace/*

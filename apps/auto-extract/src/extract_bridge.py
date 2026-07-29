@@ -384,6 +384,8 @@ def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedPr
     stdout_parts: list[str] = []
     forced_decrypt_fail = False
 
+    stop_path = layout["stop"]
+
     def _run(phase: str, prompt: str, *, force_new: bool, skill: str | None, use_stall: bool):
         nonlocal last_result
         print(f"opencode phase={phase}", flush=True)
@@ -397,11 +399,17 @@ def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedPr
             stall_sec=stall_sec if use_stall else None,
             stall_output_path=out_csv if use_stall else None,
             hard_timeout_sec=hard_timeout,
+            stop_path=stop_path,
         )
         last_result = result
         if result.stdout_text:
             stdout_parts.append(result.stdout_text)
         _append_opencode_task_log(log_fp, phase=phase, prompt=prompt, result=result)
+        reason = getattr(result, "kill_reason", None)
+        if reason in ("stop", "interrupt"):
+            from opencode_session import OpenCodeStopped
+
+            raise OpenCodeStopped(f"opencode {reason}")
         return result
 
     # --- segment 1: initial ---

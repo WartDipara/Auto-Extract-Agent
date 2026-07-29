@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -18,6 +20,10 @@ import config
 
 _log = logging.getLogger(__name__)
 
+_active_lock = threading.Lock()
+_active_proc: subprocess.Popen | None = None
+_active_stop_path: Path | None = None
+
 
 @dataclass
 class OpenCodeRunResult:
@@ -25,7 +31,7 @@ class OpenCodeRunResult:
     session_id: str = ""
     stdout_text: str = ""
     stalled: bool = False
-    # None | "stall" | "hard_timeout"
+    # None | "stall" | "hard_timeout" | "stop" | "interrupt"
     kill_reason: str | None = None
 
 
@@ -34,6 +40,10 @@ class SessionRecord:
     task_key: str
     session_id: str
     exit_code: int | None = None
+
+
+class OpenCodeStopped(RuntimeError):
+    """OpenCode was stopped via .stop marker or interrupt."""
 
 
 def output_csv_has_content(path: Path | None) -> bool:
@@ -83,6 +93,54 @@ def export_session_json(
     )
     print(f"opencode export wrote {out} ({out.stat().st_size} bytes)", flush=True)
     return out
+
+
+def interrupt_active_run() -> bool:
+    """
+    Mark .stop (if known) and kill the active OpenCode process tree.
+    Safe to call from SIGINT / main shutdown. Returns True if a proc was targeted.
+    """
+    with _active_lock:
+        proc = _active_proc
+        stop_path = _active_stop_path
+    if stop_path is not None:
+        try:
+            stop_path.parent.mkdir(parents=True, exist_ok=True)
+            stop_path.write_text("", encoding="utf-8")
+            _log.info("wrote stop marker: %s", stop_path)
+            print(f"stop marker written: {stop_path}", flush=True)
+        except OSError as exc:
+            _log.warning("cannot write stop marker %s: %s", stop_path, exc)
+    if proc is None or proc.poll() is not None:
+        return False
+    _log.info("interrupting opencode pid=%s", proc.pid)
+    print(f"interrupting opencode pid={proc.pid}", flush=True)
+    _kill_proc(proc)
+    return True
+
+
+def active_opencode_pid() -> int | None:
+    """PID of the in-flight OpenCode process, or None."""
+    with _active_lock:
+        proc = _active_proc
+    if proc is None or proc.poll() is not None:
+        return None
+    return proc.pid
+
+
+def _set_active(proc: subprocess.Popen, stop_path: Path | None) -> None:
+    global _active_proc, _active_stop_path
+    with _active_lock:
+        _active_proc = proc
+        _active_stop_path = stop_path
+
+
+def _clear_active(proc: subprocess.Popen) -> None:
+    global _active_proc, _active_stop_path
+    with _active_lock:
+        if _active_proc is proc:
+            _active_proc = None
+            _active_stop_path = None
 
 
 class OpenCodeSessionManager:
@@ -179,6 +237,7 @@ class OpenCodeSessionManager:
         stall_sec: float | None = None,
         stall_output_path: Path | None = None,
         hard_timeout_sec: float | None = None,
+        stop_path: Path | None = None,
     ) -> OpenCodeRunResult:
         """
         若该 task_key 尚无 session（或 force_new），开新会话；
@@ -188,7 +247,13 @@ class OpenCodeSessionManager:
         stall_sec: 若进程仍在跑且 stall_output_path 仍无有效内容，超时则 kill，
         返回 stalled=True（用于 resume.stall_continue / deadline_persist）。
         若期间已写出有效产物，则不再因 stall 杀进程，改等自然退出或 hard_timeout。
+
+        stop_path: 若该文件出现，杀进程树并以 kill_reason="stop" 返回。
         """
+        if stop_path is not None and stop_path.is_file():
+            _log.info("stop marker present before run: %s", stop_path)
+            return OpenCodeRunResult(returncode=-1, kill_reason="stop", stalled=True)
+
         opencode = shutil.which(config.OPENCODE_CMD) or config.OPENCODE_CMD
         existing = None if force_new else self._by_task.get(task_key)
         session_id = existing.session_id if existing else ""
@@ -221,12 +286,24 @@ class OpenCodeSessionManager:
             stall_sec=stall_sec,
             stall_output_path=stall_output_path,
             hard_timeout_sec=hard_timeout_sec,
+            stop_path=stop_path,
         )
         sid = result.session_id or session_id
         if sid:
             self.bind_session(task_key, sid, exit_code=result.returncode)
             result.session_id = sid
         return result
+
+
+def _popen_kwargs() -> dict:
+    kwargs: dict = {}
+    if os.name == "nt":
+        # Separate group so Ctrl+C on the console does not instantly tear
+        # the child before we can write .stop and kill the tree ourselves.
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    return kwargs
 
 
 def _run_json_stream(
@@ -237,6 +314,7 @@ def _run_json_stream(
     stall_sec: float | None = None,
     stall_output_path: Path | None = None,
     hard_timeout_sec: float | None = None,
+    stop_path: Path | None = None,
 ) -> OpenCodeRunResult:
     import queue as queue_mod
 
@@ -246,8 +324,10 @@ def _run_json_stream(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
+        **_popen_kwargs(),
     )
     assert proc.stdout is not None
+    _set_active(proc, stop_path)
     session_id = ""
     text_chunks: list[str] = []
     stalled = False
@@ -277,54 +357,94 @@ def _run_json_stream(
     )
     stall_armed = stall_deadline is not None
 
-    while True:
-        now = time.monotonic()
-        if hard_deadline is not None and now >= hard_deadline:
-            _log.error("opencode hard timeout after %ss", hard_timeout_sec)
-            stalled = True
-            kill_reason = "hard_timeout"
-            _kill_proc(proc)
-            break
-
-        if stall_armed and stall_deadline is not None and now >= stall_deadline:
-            if output_csv_has_content(stall_output_path):
-                stall_armed = False
-                _log.info("stall reached but output exists; wait for process exit")
-                print("stall reached but tests.csv exists; waiting exit...", flush=True)
-            else:
-                _log.warning(
-                    "opencode stall after %ss (no output at %s)",
-                    stall_sec,
-                    stall_output_path,
-                )
-                print(
-                    f"stall after {int(stall_sec)}s (no valid output); killing...",
-                    flush=True,
-                )
+    try:
+        while True:
+            now = time.monotonic()
+            if stop_path is not None and stop_path.is_file():
+                _log.info("opencode stop marker detected: %s", stop_path)
+                print(f"stop marker detected; killing opencode pid={proc.pid}", flush=True)
                 stalled = True
-                kill_reason = "stall"
+                kill_reason = "stop"
                 _kill_proc(proc)
                 break
 
-        try:
-            line = line_queue.get(timeout=0.2)
-        except queue_mod.Empty:
-            if proc.poll() is not None and line_queue.empty():
+            if hard_deadline is not None and now >= hard_deadline:
+                _log.error("opencode hard timeout after %ss", hard_timeout_sec)
+                stalled = True
+                kill_reason = "hard_timeout"
+                _kill_proc(proc)
                 break
-            continue
-        if line is None:
-            break
-        if not line:
-            continue
-        sid, human = _parse_json_event(line)
-        if sid and not session_id:
-            session_id = sid
-        if human:
-            text_chunks.append(human)
-            if print_live:
-                print(human, end="" if human.endswith("\n") else "\n", flush=True)
-        elif print_live and not line.startswith("{"):
-            print(line, flush=True)
+
+            if stall_armed and stall_deadline is not None and now >= stall_deadline:
+                if output_csv_has_content(stall_output_path):
+                    stall_armed = False
+                    _log.info("stall reached but output exists; wait for process exit")
+                    print(
+                        "stall reached but tests.csv exists; waiting exit...",
+                        flush=True,
+                    )
+                else:
+                    _log.warning(
+                        "opencode stall after %ss (no output at %s)",
+                        stall_sec,
+                        stall_output_path,
+                    )
+                    print(
+                        f"stall after {int(stall_sec)}s (no valid output); killing...",
+                        flush=True,
+                    )
+                    stalled = True
+                    kill_reason = "stall"
+                    _kill_proc(proc)
+                    break
+
+            try:
+                line = line_queue.get(timeout=0.2)
+            except queue_mod.Empty:
+                if proc.poll() is not None and line_queue.empty():
+                    if (
+                        kill_reason is None
+                        and stop_path is not None
+                        and stop_path.is_file()
+                    ):
+                        kill_reason = "stop"
+                        stalled = True
+                    break
+                continue
+            if line is None:
+                if (
+                    kill_reason is None
+                    and stop_path is not None
+                    and stop_path.is_file()
+                ):
+                    kill_reason = "stop"
+                    stalled = True
+                break
+            if not line:
+                continue
+            sid, human = _parse_json_event(line)
+            if sid and not session_id:
+                session_id = sid
+            if human:
+                text_chunks.append(human)
+                if print_live:
+                    print(human, end="" if human.endswith("\n") else "\n", flush=True)
+            elif print_live and not line.startswith("{"):
+                print(line, flush=True)
+    except KeyboardInterrupt:
+        _log.warning("KeyboardInterrupt during opencode; killing process tree")
+        print("KeyboardInterrupt; killing opencode process tree...", flush=True)
+        if stop_path is not None:
+            try:
+                stop_path.parent.mkdir(parents=True, exist_ok=True)
+                stop_path.write_text("", encoding="utf-8")
+            except OSError:
+                pass
+        stalled = True
+        kill_reason = "interrupt"
+        _kill_proc(proc)
+    finally:
+        _clear_active(proc)
 
     # drain after kill / EOF
     while True:
@@ -360,14 +480,35 @@ def _run_json_stream(
 
 
 def _kill_proc(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    pid = proc.pid
     try:
-        proc.kill()
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        else:
+            try:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.kill()
     except OSError:
-        pass
+        try:
+            proc.kill()
+        except OSError:
+            pass
     try:
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        pass
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def _decode(raw: bytes) -> str:
