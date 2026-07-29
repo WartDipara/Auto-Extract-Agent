@@ -7,9 +7,8 @@
 
 PowerShell 运行示例:
 
-  cd D:\\smwl\\Auto-Extract-Agent\\apps\\auto-extract
+  cd D:\\smwl\\Auto-Extract-Agent
   $env:PYTHONUTF8 = "1"
-  $env:PYTHONPATH = "src;../.."
   # 可选: $env:ADB_SERIAL = "你的设备序列号"
   python .\\tests\\test_prep_hotfix_e2e.py
 """
@@ -19,9 +18,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
-_SRC = _ROOT / "src"
-_REPO = _ROOT.parent.parent
+_HERE = Path(__file__).resolve().parent
+_REPO = _HERE.parent
+_APP = _REPO / "apps" / "auto-extract"
+_SRC = _APP / "src"
 for p in (_SRC, _REPO):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))

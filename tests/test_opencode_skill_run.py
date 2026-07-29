@@ -1,7 +1,7 @@
 """
 用 opencode 非交互方式调用 skill（方法1: --command）。
 
-  cd D:\\smwl\\Auto-Extract-Agent\\apps\\auto-extract
+  cd D:\\smwl\\Auto-Extract-Agent
   $env:PYTHONUTF8 = "1"
   python .\\tests\\test_opencode_skill_run.py
 """

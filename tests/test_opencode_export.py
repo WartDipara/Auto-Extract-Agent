@@ -3,7 +3,6 @@ OpenCode 冒烟：发一句简单消息，再用 export_session_json 导出对�
 
   cd D:\\smwl\\Auto-Extract-Agent
   $env:PYTHONUTF8 = "1"
-  $env:PYTHONPATH = "apps/auto-extract/src;."
   python .\\tests\\test_opencode_export.py
 """
 

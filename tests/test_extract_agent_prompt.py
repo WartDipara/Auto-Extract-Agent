@@ -1,10 +1,9 @@
 """
 OpenCode prompt smoke test for apps/auto-extract.
 
-  cd apps/auto-extract
+  cd D:\\smwl\\Auto-Extract-Agent
   $env:PYTHONUTF8 = "1"
-  $env:PYTHONPATH = "src;../.."
-  python tests/test_extract_agent_prompt.py
+  python .\\tests\\test_extract_agent_prompt.py
 """
 
 from __future__ import annotations
@@ -12,9 +11,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_APP = Path(__file__).resolve().parents[1]
+_HERE = Path(__file__).resolve().parent
+_REPO = _HERE.parent
+_APP = _REPO / "apps" / "auto-extract"
 _SRC = _APP / "src"
-_REPO = _APP.parent.parent
 for p in (_SRC, _REPO):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))

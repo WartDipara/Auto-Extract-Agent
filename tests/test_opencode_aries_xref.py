@@ -4,7 +4,7 @@
 会话管理：一任务一会话（续聊用 -s）；新任务新开会话；session 写入 state/opencode_sessions.jsonl。
 落盘校验：产物缺失则在同一会话内催写，最多 N 次。
 
-  cd D:\\smwl\\Auto-Extract-Agent\\apps\\auto-extract
+  cd D:\\smwl\\Auto-Extract-Agent
   $env:PYTHONUTF8 = "1"
   python .\\tests\\test_opencode_aries_xref.py
 """
@@ -16,10 +16,12 @@ import time
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-_ROOT = _HERE.parent
-_SRC = _ROOT / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+_REPO = _HERE.parent
+_APP = _REPO / "apps" / "auto-extract"
+_SRC = _APP / "src"
+for p in (_SRC, _REPO):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 from opencode_session import OpenCodeSessionManager  # noqa: E402
 
