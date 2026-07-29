@@ -8,6 +8,7 @@ from typing import Any
 
 from shared.archive_contract import (
     OPENCODE_OUTPUT_NAME,
+    clean_result_csv,
     default_result_csv_path,
     utc_now,
     write_meta,
@@ -24,19 +25,18 @@ def sync_result(
     meta: dict[str, Any],
 ) -> Path | None:
     tests_csv = Path(task_root) / "outputs" / OPENCODE_OUTPUT_NAME
-    if not tests_csv.is_file() or not tests_csv.read_text(
-        encoding="utf-8-sig", errors="replace"
-    ).strip():
-        print("no non-empty outputs/tests.csv; skip result sync", flush=True)
+    if not tests_csv.is_file():
+        print("no outputs/tests.csv; skip result sync", flush=True)
         return None
 
     removed = filter_sensitive_file(tests_csv)
     if removed:
         print(f"sensitive filter removed {removed} lines", flush=True)
 
-    body = tests_csv.read_text(encoding="utf-8-sig", errors="replace")
+    raw = tests_csv.read_text(encoding="utf-8-sig", errors="replace")
+    body, _session = clean_result_csv(raw)
     if not body.strip():
-        print("tests.csv empty after sensitive filter; skip result sync", flush=True)
+        print("tests.csv empty after clean/filter; skip result sync", flush=True)
         return None
 
     task_key = str(meta.get("task_key") or Path(task_root).name)

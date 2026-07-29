@@ -5,13 +5,13 @@ import subprocess
 from pathlib import Path
 
 import config
+from shared.archive_contract import sanitize_label_for_filename
 
 _log = logging.getLogger(__name__)
 
 _LABEL_RE = re.compile(
     r"^application-label(?:-([\w-]+))?:'((?:\\'|[^'])*)'\s*$"
 )
-_WIN_BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 def _resolve_aapt() -> str | None:
@@ -76,15 +76,3 @@ def primary_label(labels: dict) -> str:
         if value:
             return value
     return ""
-
-
-def sanitize_label_for_filename(label: str) -> str:
-    text = (label or "").strip()
-    if not text:
-        return "unknown"
-    text = _WIN_BAD.sub("_", text)
-    text = text.replace(" ", "")
-    text = re.sub(r"_+", "_", text).strip("._")
-    if len(text) > 80:
-        text = text[:80].rstrip("._")
-    return text or "unknown"

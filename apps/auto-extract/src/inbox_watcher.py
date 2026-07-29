@@ -1,5 +1,6 @@
 import json
 import logging
+import shutil
 import time
 from pathlib import Path
 
@@ -13,6 +14,16 @@ _log = logging.getLogger(__name__)
 
 _SETTLE_SEC = 0.4
 _PROCESSING = set()
+
+
+def _move_aside(path: Path, *, prefix: str = "") -> None:
+    config.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{prefix}{path.name}" if prefix else path.name
+    dest = config.PROCESSED_DIR / name
+    if dest.exists():
+        dest = config.PROCESSED_DIR / f"{Path(name).stem}_{int(time.time())}{path.suffix}"
+    shutil.move(str(path), str(dest))
+    _log.info("moved inbox file to %s", dest)
 
 
 def _read_json(path: Path) -> dict | None:
@@ -37,11 +48,16 @@ def _process_file(path: Path):
     try:
         data = _read_json(path)
         if data is None:
+            _move_aside(path, prefix="rejected_")
             return
         _log.info("inbox accepted: %s", path.name)
         dispatch(data, path)
+        if path.is_file():
+            _move_aside(path)
     except json.JSONDecodeError as exc:
         _log.error("invalid json %s: %s", path.name, exc)
+        if path.is_file():
+            _move_aside(path, prefix="rejected_")
     finally:
         _PROCESSING.discard(key)
 

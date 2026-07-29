@@ -1,6 +1,7 @@
 import datetime
 import json
 import logging
+import threading
 
 import config
 from models import QueueState, Task
@@ -8,6 +9,7 @@ from models import QueueState, Task
 _log = logging.getLogger(__name__)
 
 _state = QueueState()
+_lock = threading.Lock()
 
 
 def _task_to_dict(task: Task) -> dict:
@@ -52,54 +54,59 @@ def _save():
 
 
 def load():
-    if not config.QUEUE_FILE.is_file():
-        _state.next_seq = 1
-        _state.tasks = []
-        return
-    raw = json.loads(config.QUEUE_FILE.read_text(encoding="utf-8"))
-    _state.next_seq = int(raw.get("next_seq", 1))
-    _state.tasks = [_task_from_dict(item) for item in raw.get("tasks", [])]
+    with _lock:
+        if not config.QUEUE_FILE.is_file():
+            _state.next_seq = 1
+            _state.tasks = []
+            return
+        raw = json.loads(config.QUEUE_FILE.read_text(encoding="utf-8"))
+        _state.next_seq = int(raw.get("next_seq", 1))
+        _state.tasks = [_task_from_dict(item) for item in raw.get("tasks", [])]
 
 
 def enqueue_urls(urls: list, source_file: str) -> list:
-    created = []
-    for url in urls:
-        url = (url or "").strip()
-        if not url:
-            continue
-        task_id = f"t-{_state.next_seq:04d}"
-        _state.next_seq += 1
-        task = Task(task_id=task_id, url=url, source_file=source_file)
-        _state.tasks.append(task)
-        created.append(task)
-        _log.info("enqueued %s %s", task_id, url)
-    _save()
-    return created
+    with _lock:
+        created = []
+        for url in urls:
+            url = (url or "").strip()
+            if not url:
+                continue
+            task_id = f"t-{_state.next_seq:04d}"
+            _state.next_seq += 1
+            task = Task(task_id=task_id, url=url, source_file=source_file)
+            _state.tasks.append(task)
+            created.append(task)
+            _log.info("enqueued %s %s", task_id, url)
+        _save()
+        return created
 
 
 def get_next_runnable() -> Task | None:
-    for task in _state.tasks:
-        if task.status in ("downloading", "preparing", "submitting", "waiting_csv"):
-            return task
-    for task in _state.tasks:
-        if task.status in ("queued", "downloaded"):
-            return task
-    return None
+    with _lock:
+        for task in _state.tasks:
+            if task.status in ("downloading", "preparing", "submitting", "waiting_csv"):
+                return task
+        for task in _state.tasks:
+            if task.status in ("queued", "downloaded"):
+                return task
+        return None
 
 
 def update_task(task_id: str, **fields) -> Task | None:
-    for task in _state.tasks:
-        if task.task_id != task_id:
-            continue
-        for key, value in fields.items():
-            setattr(task, key, value)
-        _save()
-        return task
-    return None
+    with _lock:
+        for task in _state.tasks:
+            if task.task_id != task_id:
+                continue
+            for key, value in fields.items():
+                setattr(task, key, value)
+            _save()
+            return task
+        return None
 
 
 def list_tasks() -> list:
-    return list(_state.tasks)
+    with _lock:
+        return list(_state.tasks)
 
 
 def append_session_record(task: Task):

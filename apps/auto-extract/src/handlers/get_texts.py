@@ -12,7 +12,6 @@ from extract_bridge import (
     append_session_to_log,
     archive_csv,
     classify_csv,
-    clean_result_csv,
     cleanup_download_apk,
     ensure_csv_after_agent,
     invoke_extract_agent,
@@ -23,6 +22,7 @@ from models import Task
 from prep import run_device_prep
 from shared.archive_contract import (
     FollowupLockedError,
+    clean_result_csv,
     has_stop,
     mark_module_a_done,
     mark_stop,
@@ -88,15 +88,6 @@ def _ensure_apk(task: Task) -> Path:
     return apk_path
 
 
-def _other_pipeline_busy(task_id: str) -> str | None:
-    for item in queue_manager.list_tasks():
-        if item.task_id == task_id:
-            continue
-        if item.status in ("submitting", "waiting_csv", "preparing"):
-            return item.task_id
-    return None
-
-
 def _process_task(task: Task):
     task_id = task.task_id
     filename = ""
@@ -105,16 +96,6 @@ def _process_task(task: Task):
         filename = apk_path.name
         task_key = Path(filename).stem
         label = task.label or ""
-
-        busy = _other_pipeline_busy(task_id)
-        if busy is not None:
-            _log.error("pipeline busy (%s), refuse submit for %s", busy, task_id)
-            queue_manager.update_task(
-                task_id,
-                status="failed",
-                error=f"pipeline busy: {busy}",
-            )
-            return
 
         print(f"task workspace: {task_key}", flush=True)
         try:
@@ -197,6 +178,11 @@ def _process_task(task: Task):
             mark_module_a_done(task_root)
             print(f"module A done marker written: {task_key}", flush=True)
 
+        print(
+            f"module A task finished: {task_key} status={status} "
+            f"label={label or '-'} session={session_id or '-'}",
+            flush=True,
+        )
         _log.info(
             "task %s done status=%s label=%s session=%s",
             task_id,
@@ -269,6 +255,7 @@ def handle_get_texts(body: dict, source_path: Path):
     urls = body.get("urls") if isinstance(body, dict) else None
     if not isinstance(urls, list) or not urls:
         _log.warning("get-texts missing urls: %s", source_path.name)
+        _move_processed(source_path)
         return
     ensure_worker()
     queue_manager.enqueue_urls(urls, source_file=source_path.name)

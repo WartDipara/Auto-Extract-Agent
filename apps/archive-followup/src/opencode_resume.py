@@ -11,6 +11,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from shared.proc_util import detached_popen_kwargs, kill_process_tree
+
 _log = logging.getLogger(__name__)
 
 
@@ -89,6 +91,7 @@ def resume_opencode(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
+        **detached_popen_kwargs(),
     )
     assert proc.stdout is not None
     line_queue: queue_mod.Queue = queue_mod.Queue()
@@ -107,28 +110,32 @@ def resume_opencode(
 
     threading.Thread(target=_reader, name="opencode-resume-stdout", daemon=True).start()
 
-    while True:
-        try:
-            line = line_queue.get(timeout=0.2)
-        except queue_mod.Empty:
-            if proc.poll() is not None and line_queue.empty():
+    try:
+        while True:
+            try:
+                line = line_queue.get(timeout=0.2)
+            except queue_mod.Empty:
+                if proc.poll() is not None and line_queue.empty():
+                    break
+                continue
+            if line is None:
                 break
-            continue
-        if line is None:
-            break
-        if not line:
-            continue
-        sid, human = _parse_json_event(line)
-        if sid:
-            seen_sid = sid
-        if human:
-            chunks.append(human)
-            if print_live:
-                print(human, end="" if human.endswith("\n") else "\n", flush=True)
-        elif print_live and not line.startswith("{"):
-            print(line, flush=True)
+            if not line:
+                continue
+            sid, human = _parse_json_event(line)
+            if sid:
+                seen_sid = sid
+            if human:
+                chunks.append(human)
+                if print_live:
+                    print(human, end="" if human.endswith("\n") else "\n", flush=True)
+            elif print_live and not line.startswith("{"):
+                print(line, flush=True)
+        code = proc.wait()
+    except KeyboardInterrupt:
+        kill_process_tree(proc)
+        raise
 
-    code = proc.wait()
     print(
         f"--- end exit_code={code} session={seen_sid or '-'} ---",
         flush=True,

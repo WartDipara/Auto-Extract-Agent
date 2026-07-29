@@ -137,6 +137,17 @@ def test_workspace_markers():
     except FollowupLockedError:
         pass
     release_followup_lock(root)
+
+    from shared.archive_contract import has_stop, mark_stop
+
+    mark_stop(root)
+    assert has_stop(root)
+    try:
+        acquire_followup_lock(root)
+        assert False, "expected RuntimeError when stopped"
+    except RuntimeError:
+        pass
+
     root2 = reset_task_workspace(config.WORKSPACE_ROOT, key)
     assert root2 == root
     assert not has_module_a_done(root2)

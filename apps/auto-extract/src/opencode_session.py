@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
-import signal
 import subprocess
 import threading
 import time
@@ -17,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import config
+from shared.proc_util import detached_popen_kwargs, kill_process_tree
 
 _log = logging.getLogger(__name__)
 
@@ -295,17 +294,6 @@ class OpenCodeSessionManager:
         return result
 
 
-def _popen_kwargs() -> dict:
-    kwargs: dict = {}
-    if os.name == "nt":
-        # Separate group so Ctrl+C on the console does not instantly tear
-        # the child before we can write .stop and kill the tree ourselves.
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-    return kwargs
-
-
 def _run_json_stream(
     cmd: list[str],
     *,
@@ -324,7 +312,7 @@ def _run_json_stream(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=0,
-        **_popen_kwargs(),
+        **detached_popen_kwargs(),
     )
     assert proc.stdout is not None
     _set_active(proc, stop_path)
@@ -480,35 +468,7 @@ def _run_json_stream(
 
 
 def _kill_proc(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
-    pid = proc.pid
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        else:
-            try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                proc.kill()
-    except OSError:
-        try:
-            proc.kill()
-        except OSError:
-            pass
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        try:
-            proc.kill()
-            proc.wait(timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    kill_process_tree(proc)
 
 
 def _decode(raw: bytes) -> str:

@@ -24,10 +24,8 @@ def download(url: str, dest_dir: Path | None = None) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     filename = _filename_from_url(url)
     dest = target_dir / filename
-    if dest.is_file() and dest.stat().st_size > 0:
-        print(f"download skipped (cached) {dest.name}", flush=True)
-        _log.info("reuse existing download: %s (%s bytes)", dest, dest.stat().st_size)
-        return dest
+    if dest.is_file():
+        dest.unlink()
     print(f"downloading {filename}", flush=True)
     _log.info("downloading %s -> %s", url, dest)
     with requests.get(url, stream=True, timeout=config.DOWNLOAD_TIMEOUT_SEC) as resp:

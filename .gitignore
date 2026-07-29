@@ -103,3 +103,5 @@ tmp/
 tests/export_workspace/
 tests/interrupt_workspace/
 tests/test_workspace/*
+# Added by code-review-graph
+.code-review-graph/

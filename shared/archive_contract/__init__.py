@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import shutil
 import stat
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +32,7 @@ MODULE_A_DONE = ".module_a_done"
 FOLLOWUP_LOCK = ".followup_lock"
 STOP_MARKER = ".stop"
 
+_WIN_BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _log = logging.getLogger(__name__)
 
 
@@ -74,6 +78,38 @@ def task_layout(task_root: Path) -> dict[str, Path]:
     }
 
 
+def sanitize_label_for_filename(label: str) -> str:
+    text = (label or "").strip()
+    if not text:
+        return "unknown"
+    text = _WIN_BAD.sub("_", text)
+    text = text.replace(" ", "")
+    text = re.sub(r"_+", "_", text).strip("._")
+    if len(text) > 80:
+        text = text[:80].rstrip("._")
+    return text or "unknown"
+
+
+def clean_result_csv(text: str) -> tuple[str, str]:
+    """Strip optional `text` header and `__SESSION_ID__:` footer. Returns (body, session_id)."""
+    lines = text.splitlines()
+    session_id = ""
+    if lines and lines[0].strip() == "text":
+        lines = lines[1:]
+    if lines and lines[-1].strip().startswith("__SESSION_ID__:"):
+        session_id = lines[-1].split(":", 1)[1].strip()
+        lines = lines[:-1]
+    body = "\n".join(lines).strip("\n")
+    if body:
+        body = body + "\n"
+    return body, session_id
+
+
+def default_result_csv_path(result_dir: Path, task_key: str, label: str) -> Path:
+    safe = sanitize_label_for_filename(label)
+    return Path(result_dir) / f"{task_key}_{safe}.csv"
+
+
 def _on_rm_error(func, path, exc_info):
     try:
         Path(path).chmod(stat.S_IWRITE)
@@ -92,7 +128,19 @@ def rmtree_force(path: Path) -> None:
             pass
         if not path.exists():
             return
+        if os.name == "nt":
+            subprocess.run(
+                ["cmd", "/c", "rmdir", "/s", "/q", str(path)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if not path.exists():
+                return
         time.sleep(0.3)
+    if path.exists():
+        _log.warning("rmtree_force incomplete: %s", path)
 
 
 def has_module_a_done(task_root: Path) -> bool:
@@ -112,7 +160,6 @@ def mark_module_a_done(task_root: Path) -> None:
 
 
 def mark_stop(task_root: Path) -> Path:
-    """Mark task as discarded. Running OpenCode polls this path and exits."""
     path = Path(task_root) / STOP_MARKER
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("", encoding="utf-8")
@@ -120,11 +167,6 @@ def mark_stop(task_root: Path) -> Path:
 
 
 def purge_stopped_workspaces(workspace_root: Path) -> list[str]:
-    """
-    Delete task workspaces that carry .stop.
-    Skips when .followup_lock is present (B still writing).
-    Returns deleted task_key list.
-    """
     deleted: list[str] = []
     for task_key, task_root in iter_task_workspaces(workspace_root):
         if not has_stop(task_root):
@@ -143,12 +185,19 @@ def purge_stopped_workspaces(workspace_root: Path) -> list[str]:
 
 def acquire_followup_lock(task_root: Path) -> None:
     root = Path(task_root)
+    if has_stop(root):
+        raise RuntimeError(f"task stopped: {root.name}")
     if not has_module_a_done(root):
         raise RuntimeError(f"module A not done: {root.name}")
     lock = root / FOLLOWUP_LOCK
-    if lock.is_file():
-        raise RuntimeError(f"followup already running: {root.name}")
-    lock.write_text("", encoding="utf-8")
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise RuntimeError(f"followup already running: {root.name}") from exc
+    try:
+        os.write(fd, b"")
+    finally:
+        os.close(fd)
 
 
 def release_followup_lock(task_root: Path) -> None:
@@ -158,10 +207,6 @@ def release_followup_lock(task_root: Path) -> None:
 
 
 def reset_task_workspace(workspace_root: Path, task_key: str) -> Path:
-    """
-    Create a fresh task workspace. If the directory already exists, wipe it
-    (overwrite). Refuses when .followup_lock is present.
-    """
     root = task_workspace(workspace_root, task_key)
     if has_followup_lock(root):
         raise FollowupLockedError(f"followup in progress: {task_key}")
@@ -197,7 +242,6 @@ def read_meta(task_root: Path) -> dict[str, Any] | None:
 
 
 def iter_task_workspaces(workspace_root: Path):
-    """Yield (task_key, task_root) for immediate child directories."""
     root = Path(workspace_root)
     if not root.is_dir():
         return
@@ -217,9 +261,3 @@ def find_task_root_by_session(
         if meta and str(meta.get("session_id") or "").strip() == sid:
             return task_root
     return None
-
-
-def default_result_csv_path(result_dir: Path, task_key: str, label: str) -> Path:
-    safe = "".join(c if c not in '\\/:*?"<>|' else "_" for c in (label or "").strip())
-    name = f"{task_key}_{safe}.csv" if safe else f"{task_key}.csv"
-    return Path(result_dir) / name

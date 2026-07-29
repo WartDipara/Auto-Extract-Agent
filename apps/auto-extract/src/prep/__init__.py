@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import config
@@ -28,10 +27,6 @@ _log = logging.getLogger(__name__)
 def stage(msg: str) -> None:
     line = msg.strip()
     print(line, flush=True)
-    try:
-        sys.stdout.flush()
-    except Exception:
-        pass
     _log.info("%s", line)
 
 
@@ -47,7 +42,6 @@ class PrepResult:
     pull_source: str
     task_root: Path
     screen_reached: str = ""
-    errors: list[str] = field(default_factory=list)
 
 
 def run_device_prep(
@@ -160,12 +154,11 @@ def run_device_prep(
             stage("post-launch budget exhausted before ocr gate")
 
     remaining = launch_deadline - time.monotonic()
-    if remaining > 0:
-        stage("pulling hotfix...")
-        pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
-        stage(f"hotfix pull finished source={pull_source}")
-    else:
-        stage("skip hotfix pull (post-launch budget exhausted)")
+    if remaining <= 0:
+        stage("post-launch budget exhausted; still attempting hotfix pull before exit")
+    stage("pulling hotfix...")
+    pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
+    stage(f"hotfix pull finished source={pull_source}")
 
     stage("stopping game...")
     adb.force_stop(package_name)

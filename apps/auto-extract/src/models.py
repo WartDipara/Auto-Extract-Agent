@@ -13,7 +13,6 @@ STATUSES = (
     "abnormal_exit",
     "failed",
     "timeout",
-    "archive_failed",
 )
 
 

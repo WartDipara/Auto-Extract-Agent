@@ -123,7 +123,7 @@ def _try_pull_run_as(adb: AdbDevice, package: str, hotfix_dir: Path) -> bool:
             ok_any = True
             continue
         _log.warning("run-as pull failed for dir %s", name)
-    return ok_any or True
+    return ok_any
 
 
 def _pull_run_as_dir_tar(

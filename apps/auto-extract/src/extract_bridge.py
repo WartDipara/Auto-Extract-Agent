@@ -1,22 +1,16 @@
 import datetime
 import logging
-import os
-import queue
 import re
 import subprocess
-import threading
 import time
 from pathlib import Path
 
 import config
-from apk_meta import sanitize_label_for_filename
+from shared.archive_contract import sanitize_label_for_filename
 
 _log = logging.getLogger(__name__)
 
 _SEP = "=" * 60
-_ANSI_RE = re.compile(
-    r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))"
-)
 
 # Serial A only: current task workspace root for this module.
 _task_root: Path | None = None
@@ -39,12 +33,6 @@ def result_csv_path(apk_name: str) -> Path:
     return opencode_output_csv()
 
 
-def _csv_path_for_apk(apk_name: str) -> Path:
-    """兼容旧调用名；实际委托 result_csv_path。"""
-    return result_csv_path(apk_name)
-
-
-
 def _log_path_for_apk(apk_name: str) -> Path:
     stem = Path(apk_name).stem
     return config.LOGS_DIR / f"{stem}.log"
@@ -58,34 +46,6 @@ def _safe_write(fp, text: str):
         fp.flush()
     except OSError:
         pass
-
-
-def _decode_stdout_bytes(data: bytes) -> str:
-    if not data:
-        return ""
-    for encoding in ("utf-8", "gbk", "cp936"):
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="replace")
-
-
-def _escape_for_log(text: str) -> str:
-    text = _ANSI_RE.sub("", text)
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    out = []
-    for ch in text:
-        code = ord(ch)
-        if ch == "\n" or ch == "\t":
-            out.append(ch)
-        elif code < 32 or code == 127:
-            out.append(f"\\x{code:02x}")
-        elif 0x80 <= code <= 0x9F:
-            out.append(f"\\u{code:04x}")
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _csv_footer_status(csv_path: Path) -> str:
@@ -115,17 +75,6 @@ def _open_task_log(apk_name: str):
     except OSError as exc:
         _log.error("cannot open task log for %s: %s", apk_name, exc)
         return None, None
-
-
-def _stream_stdout(proc: subprocess.Popen, line_queue: queue.Queue):
-    try:
-        while True:
-            raw = proc.stdout.readline()
-            if raw == b"":
-                break
-            line_queue.put(_escape_for_log(_decode_stdout_bytes(raw)))
-    finally:
-        line_queue.put(None)
 
 
 def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
@@ -167,18 +116,8 @@ def csv_has_content(apk_name: str) -> bool:
 
 
 def ensure_csv_after_agent(apk_name: str, returncode: int) -> Path:
-    """Agent 退出后若无 CSV，立即写入异常退出标记；不做长时间空等。
-
-    OpenCode 路径应在 invoke_opencode 内完成 resume / 落盘保证后再调用本函数；
-    此处仅作兜底，避免覆盖已有有效 tests.csv。
-    """
     if csv_has_content(apk_name):
         return result_csv_path(apk_name)
-    deadline = time.monotonic() + config.CSV_GRACE_SEC
-    while time.monotonic() < deadline:
-        if csv_has_content(apk_name):
-            return result_csv_path(apk_name)
-        time.sleep(0.5)
     agent = "opencode"
     if returncode != 0:
         reason = f"{agent} 非零退出 exit={returncode}，未产出 CSV"
@@ -668,20 +607,6 @@ def wait_for_csv(apk_name: str, timeout_sec: float | None = None) -> tuple[Path,
     raise TimeoutError(f"csv timeout: {csv_path.name}")
 
 
-def clean_result_csv(text: str) -> tuple[str, str]:
-    lines = text.splitlines()
-    session_id = ""
-    if lines and lines[0].strip() == "text":
-        lines = lines[1:]
-    if lines and lines[-1].strip().startswith("__SESSION_ID__:"):
-        session_id = lines[-1].split(":", 1)[1].strip()
-        lines = lines[:-1]
-    body = "\n".join(lines).strip("\n")
-    if body:
-        body = body + "\n"
-    return body, session_id
-
-
 def classify_csv(text: str) -> str:
     stripped = text.strip()
     markers = (
@@ -734,7 +659,3 @@ def cleanup_download_apk(apk_name: str = ""):
             print(f"removed download {apk_path.name}", flush=True)
         except OSError as exc:
             _log.error("cannot remove download apk %s: %s", apk_path, exc)
-
-
-# Back-compat alias
-cleanup_apk = cleanup_download_apk
