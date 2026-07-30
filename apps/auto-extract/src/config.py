@@ -55,10 +55,10 @@ DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_TIMEOUT_SEC = 300
 AAPT_PATH = ""
 ADB_CMD = "adb"
-PREP_OCR_TIMEOUT_SEC = 600
+# Safety ceiling for AI entry-screen gate (privacy + asset download). Scene exit is AI done().
+PREP_GATE_TIMEOUT_SEC = 1200
 PREP_OCR_POLL_SEC = 3.0
 PREP_AGENT_INTERVAL_SEC = 3.0
-PREP_POST_LAUNCH_BUDGET_SEC = 180
 ADB_SERIAL = os.environ.get("ADB_SERIAL", "").strip()
 
 

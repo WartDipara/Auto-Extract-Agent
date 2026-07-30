@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,36 +128,27 @@ def run_device_prep(
     adb.launch_package(package_name)
     stage("game started")
 
-    budget = float(config.PREP_POST_LAUNCH_BUDGET_SEC)
-    launch_deadline = time.monotonic() + budget
-    stage(f"post-launch budget {int(budget)}s (ocr+hotfix)")
+    gate_timeout = float(config.PREP_GATE_TIMEOUT_SEC)
+    stage(f"entry gate timeout {int(gate_timeout)}s (AI done / crash / safety)")
 
     screen_reached = "skipped"
     pull_source = "none"
     if not skip_ocr_gate:
-        remaining = launch_deadline - time.monotonic()
-        if remaining > 0:
-            stage("waiting entry screen (ocr gate)...")
-            try:
-                screen_reached = wait_until_entry_screen(
-                    adb,
-                    package_name=package_name,
-                    timeout_sec=min(remaining, float(config.PREP_OCR_TIMEOUT_SEC)),
-                    poll_sec=config.PREP_OCR_POLL_SEC,
-                    agent_interval_sec=float(config.PREP_AGENT_INTERVAL_SEC),
-                    foreground_poll_sec=float(config.PREP_FOREGROUND_POLL_SEC),
-                )
-                stage(f"entry screen reached: {screen_reached}")
-            except TimeoutError:
-                screen_reached = "timeout"
-                stage("ocr gate timed out within budget")
-        else:
-            screen_reached = "budget_exhausted"
-            stage("post-launch budget exhausted before ocr gate")
+        stage("waiting entry screen (ocr gate)...")
+        try:
+            screen_reached = wait_until_entry_screen(
+                adb,
+                package_name=package_name,
+                timeout_sec=gate_timeout,
+                poll_sec=config.PREP_OCR_POLL_SEC,
+                agent_interval_sec=float(config.PREP_AGENT_INTERVAL_SEC),
+                foreground_poll_sec=float(config.PREP_FOREGROUND_POLL_SEC),
+            )
+            stage(f"entry screen reached: {screen_reached}")
+        except TimeoutError:
+            screen_reached = "timeout"
+            stage("ocr gate safety timeout; still attempting hotfix pull")
 
-    remaining = launch_deadline - time.monotonic()
-    if remaining <= 0:
-        stage("post-launch budget exhausted; still attempting hotfix pull before exit")
     stage("pulling hotfix...")
     pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
     stage(f"hotfix pull finished source={pull_source}")

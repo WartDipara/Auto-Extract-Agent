@@ -21,7 +21,7 @@ def wait_until_entry_screen(
     adb: AdbDevice,
     *,
     package_name: str,
-    timeout_sec: float = 600,
+    timeout_sec: float = 1200,
     poll_sec: float = 3.0,
     agent_interval_sec: float = 3.0,
     foreground_poll_sec: float = 1.5,
