@@ -225,7 +225,7 @@ def build_opencode_prompt(apk_name: str, snap: dict | None = None) -> str:
 def build_opencode_resume_prompt(
     kind: str, apk_name: str, snap: dict | None = None, **extra_slots
 ) -> str:
-    """kind: stall_continue | deadline_persist | missing_output | quality_*."""
+    """kind: stall_continue | deadline_persist | missing_output | final_csv_review | quality_*."""
     import prompts as prompt_store
 
     snap = snap or workspace_ready_snapshot()
@@ -407,6 +407,7 @@ def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedPr
     elif not _opencode_tests_ok():
         write_decrypt_fail_csv(apk_name, reason="OpenCode 结束后仍无有效 tests.csv")
     else:
+        _ask_final_csv_review(apk_name, snap, _run)
         _resume_quality_gate(mgr, apk_name, snap, task_key, _run)
 
     end = datetime.datetime.now()
@@ -607,6 +608,19 @@ def _resume_quality_gate(mgr, apk_name, snap, task_key, run_fn):
             skill=None,
             use_stall=False,
         )
+
+
+def _ask_final_csv_review(apk_name, snap, run_fn):
+    """One post-extract pass: ask OpenCode to scrub garbled / truncated / comments / bad rows."""
+    prompt = build_opencode_resume_prompt("final_csv_review", apk_name, snap)
+    print("opencode final_csv_review", flush=True)
+    run_fn(
+        "final_csv_review",
+        prompt,
+        force_new=False,
+        skill=None,
+        use_stall=False,
+    )
 
 
 def _ask_empty_classify(apk_name, snap, run_fn):

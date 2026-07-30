@@ -15,6 +15,8 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _MOJIBAKE_RE = re.compile(
     r"[ÃÂåæçèéêëìíîïðñòóôõöøùúûüýþÿÄÅÆÇÉÑÖØÜßÐÞ]"
 )
+# Binary residue in extracted strings (e.g. UTF-16 NUL/DEL crumbs). Keep \t.
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 # Single source for terminal failure markers (extend here only).
 TERMINAL_MARKERS: tuple[tuple[str, str], ...] = (
@@ -77,7 +79,10 @@ def _is_terminal_marker(text: str) -> bool:
 
 
 def line_looks_garbled(line: str) -> bool:
+    """True for encoding/binary residue. Rich-text tags like <color=...> are not garbled."""
     if "\ufffd" in line:
+        return True
+    if _CTRL_RE.search(line):
         return True
     cjk = len(_CJK_RE.findall(line))
     moji = len(_MOJIBAKE_RE.findall(line))

@@ -22,7 +22,6 @@ pydantic==2.13.4
 protobuf==7.35.1
 tqdm==4.67.3
 orjson==3.11.8
-pyahocorasick==2.2.0
 
 # ── Device prep: UI click + OCR (PC-side) ──
 uiautomator2==3.5.2

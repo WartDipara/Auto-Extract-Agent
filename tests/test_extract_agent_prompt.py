@@ -75,6 +75,12 @@ def test_opencode_prompt_and_cmd():
     assert str(config.CSV_MIN_LINES) in too_few
     assert "乱码" in garbled
     assert "解密" in garbled
+    review = eb.build_opencode_resume_prompt("final_csv_review", apk_name, snap)
+    assert "乱码" in review
+    assert "截断" in review
+    assert "注释" in review or "调试" in review
+    assert "错误提取" in review
+    assert "富文本" in review or "color" in review
     assert config.ASSETS_MISSING_TEXT in prompt
     assert "只提取中文" in prompt or "只提取中文" in prompt.replace(" ", "")
     assert "多语言" in prompt
@@ -107,7 +113,10 @@ def test_csv_quality():
 
     assert line_looks_garbled("bad\ufffdtext")
     assert line_looks_garbled("Ã¤Â¸Â­Ã¦Â–Â‡xx")
+    assert line_looks_garbled("\x7f树精灵女皇？嫌疑犯的范围越缩越小了！")
+    assert line_looks_garbled("装备\x7f")
     assert not line_looks_garbled("这是正常中文文本")
+    assert not line_looks_garbled("<color=#FF6B00>{0}</color> 秒后复活")
 
     assert not has_extract_content("text\n")
     assert not has_extract_content("")
@@ -132,6 +141,13 @@ def test_csv_quality():
     issue2 = check_csv_quality(garbled_body)
     assert issue2 is not None and issue2.kind == "garbled"
 
+    ctrl_body = "\n".join(
+        [f"\x7f对话残留{i}" for i in range(config.CSV_GARBLE_MIN_LINES + 1)]
+        + good_lines
+    )
+    assert check_csv_quality(ctrl_body) is not None
+    assert check_csv_quality(ctrl_body).kind == "garbled"
+
     assert check_csv_quality(config.DECRYPT_FAIL_TEXT) is None
     assert match_terminal_status(config.DECRYPT_FAIL_TEXT) == "decrypt_failed"
     assert (
@@ -144,15 +160,23 @@ def test_csv_quality():
     assert match_terminal_status(halluc) is None
     assert check_csv_quality(halluc) is not None
 
-    words = frozenset({"色情论坛", "一夜性网"})
+    words = frozenset({"色情论坛", "一夜性网", "女神教"})
     raw = "任务说明\n色情论坛\n正常文本\n一夜性网\n包含色情论坛的长句\n短行\n"
     filtered, removed = filter_sensitive_lines(raw, words=words)
-    assert removed == 3
-    assert filtered.splitlines() == ["任务说明", "正常文本", "短行"]
+    assert removed == 2
+    assert filtered.splitlines() == ["任务说明", "正常文本", "包含色情论坛的长句", "短行"]
     hit = scan_sensitive_hits(raw, words=words)
-    assert hit.hit_lines == 3
+    assert hit.hit_lines == 2
     assert hit.hit_lines < config.SENSITIVE_HIT_MIN
-    many = "\n".join([f"含色情论坛{i}" for i in range(config.SENSITIVE_HIT_MIN)])
+    # 整行全等才算命中：行内包含敏感词不算
+    nested = "[女神教] 大祭師\n女神教信徒\n女神教\n"
+    nested_hit = scan_sensitive_hits(nested, words=words)
+    assert nested_hit.hit_lines == 1
+    assert nested_hit.samples == ("女神教",)
+    nested_filtered, nested_removed = filter_sensitive_lines(nested, words=words)
+    assert nested_removed == 1
+    assert nested_filtered.splitlines() == ["[女神教] 大祭師", "女神教信徒"]
+    many = "\n".join(["色情论坛"] * config.SENSITIVE_HIT_MIN)
     assert scan_sensitive_hits(many, words=words).hit_lines >= config.SENSITIVE_HIT_MIN
     print("CSV_QUALITY_OK", flush=True)
 

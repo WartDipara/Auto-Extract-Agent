@@ -2,7 +2,7 @@
 Shared sensitive-word table for post-extract CSV filtering / detection.
 
 Word list: shared/sensitive_words/sensitive.txt (one word per line).
-Matching: Aho-Corasick multi-pattern automaton (pyahocorasick).
+Matching: exact full-line match only (整行全字匹配).
 Resume hit threshold is configured by callers (SENSITIVE_HIT_MIN).
 """
 
@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-
-import ahocorasick
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_SENSITIVE_FILE = _PACKAGE_DIR / "sensitive.txt"
@@ -21,7 +19,6 @@ _MIN_WORD_LEN = 2
 
 _cached_path: Path | None = None
 _cached_words: frozenset[str] | None = None
-_cached_automaton: ahocorasick.Automaton | None = None
 
 
 def sensitive_words_path() -> Path:
@@ -29,7 +26,7 @@ def sensitive_words_path() -> Path:
 
 
 def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
-    global _cached_path, _cached_words, _cached_automaton
+    global _cached_path, _cached_words
     target = Path(path) if path is not None else DEFAULT_SENSITIVE_FILE
     if _cached_words is not None and _cached_path == target:
         return _cached_words
@@ -43,44 +40,17 @@ def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
             words.add(w)
     _cached_path = target
     _cached_words = frozenset(words)
-    _cached_automaton = None
     return _cached_words
 
 
 def clear_sensitive_words_cache() -> None:
-    global _cached_path, _cached_words, _cached_automaton
+    global _cached_path, _cached_words
     _cached_path = None
     _cached_words = None
-    _cached_automaton = None
 
 
-def _build_automaton(words: frozenset[str] | set[str]) -> ahocorasick.Automaton:
-    auto = ahocorasick.Automaton()
-    for w in words:
-        if len(w) >= _MIN_WORD_LEN:
-            auto.add_word(w, w)
-    auto.make_automaton()
-    return auto
-
-
-def _automaton(words: frozenset[str] | set[str]) -> ahocorasick.Automaton:
-    global _cached_automaton, _cached_words
-    if (
-        _cached_automaton is not None
-        and _cached_words is not None
-        and words == _cached_words
-    ):
-        return _cached_automaton
-    auto = _build_automaton(words)
-    if _cached_words is not None and words == _cached_words:
-        _cached_automaton = auto
-    return auto
-
-
-def _line_has_sensitive(line: str, auto: ahocorasick.Automaton) -> bool:
-    for _ in auto.iter(line):
-        return True
-    return False
+def _line_is_sensitive(line: str, table: frozenset[str] | set[str]) -> bool:
+    return line in table
 
 
 @dataclass(frozen=True)
@@ -95,16 +65,15 @@ def scan_sensitive_hits(
     words: frozenset[str] | set[str] | None = None,
     sample_limit: int = 8,
 ) -> SensitiveHitResult:
-    """Count content lines that contain at least one sensitive substring."""
+    """Count content lines whose full text equals a sensitive word."""
     table = words if words is not None else load_sensitive_words()
-    auto = _automaton(table)
     hits = 0
     samples: list[str] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line == "text":
             continue
-        if _line_has_sensitive(line, auto):
+        if _line_is_sensitive(line, table):
             hits += 1
             if len(samples) < sample_limit:
                 samples.append(line[:80])
@@ -116,16 +85,15 @@ def filter_sensitive_lines(
     *,
     words: frozenset[str] | set[str] | None = None,
 ) -> tuple[str, int]:
-    """Drop lines that contain any sensitive substring. Returns (body, removed)."""
+    """Drop lines that exactly equal a sensitive word. Returns (body, removed)."""
     table = words if words is not None else load_sensitive_words()
-    auto = _automaton(table)
     kept: list[str] = []
     removed = 0
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line != "text" and _line_has_sensitive(line, auto):
+        if line != "text" and _line_is_sensitive(line, table):
             removed += 1
             continue
         kept.append(line)
