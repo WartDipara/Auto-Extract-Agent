@@ -51,7 +51,7 @@ def _recover_if_needed(task: Task) -> bool:
     if task.status == "downloading":
         queue_manager.update_task(task.task_id, status="queued")
         return True
-    if task.status in ("submitting", "waiting_csv", "preparing"):
+    if task.status in ("submitting", "archiving", "preparing"):
         if task.filename:
             cleanup_download_apk(task.filename)
         queue_manager.update_task(
@@ -128,7 +128,7 @@ def _process_task(task: Task):
                 (result.stderr or result.stdout or "").strip(),
             )
 
-        queue_manager.update_task(task_id, status="waiting_csv")
+        queue_manager.update_task(task_id, status="archiving")
         ensure_csv_after_agent(filename, result.returncode)
         csv_path, text = wait_for_csv(filename, timeout_sec=config.CSV_GRACE_SEC)
         status = classify_csv(text)

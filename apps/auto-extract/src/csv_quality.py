@@ -1,7 +1,7 @@
 """Post-OpenCode CSV quality checks before archiving to result/.
 
-Callers must run sensitive-word filtering first; line-count uses the
-filtered tests.csv (see extract_bridge._apply_sensitive_filter).
+Sensitive detection/filter lives in shared.sensitive_words; this module
+handles empty / garbled / too_few and terminal markers.
 """
 
 from __future__ import annotations
@@ -88,10 +88,18 @@ def line_looks_garbled(line: str) -> bool:
     return False
 
 
+def has_extract_content(text: str) -> bool:
+    """True if CSV has a terminal marker or at least one content line (not header-only)."""
+    if match_terminal_status(text) is not None:
+        return True
+    return len(_content_lines(text)) > 0
+
+
 def check_csv_quality(text: str) -> QualityIssue | None:
     """
     Return first blocking issue, or None if OK / accepted terminal marker.
     Order: terminal skip → garbled → empty → too_few.
+    Sensitive checks run outside this module (caller decides relative order).
     """
     if _is_terminal_marker(text):
         return None

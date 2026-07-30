@@ -49,7 +49,8 @@ def test_opencode_prompt_and_cmd():
     assert "--auto" in cmd
     assert eb.opencode_output_csv().name == "tests.csv"
     assert layout["opencode_export"].name == "opencode_session.json"
-    assert eb.build_opencode_resume_prompt("stall_continue", apk_name, snap).strip() == "继续"
+    stall = eb.build_opencode_resume_prompt("stall_continue", apk_name, snap)
+    assert "半小时" in stall and "继续" in stall
     empty = eb.build_opencode_resume_prompt("classify_empty", apk_name, snap)
     assert config.ASSETS_MISSING_TEXT in empty
     assert config.DECRYPT_FAIL_TEXT in empty
@@ -75,6 +76,18 @@ def test_opencode_prompt_and_cmd():
     assert "乱码" in garbled
     assert "解密" in garbled
     assert config.ASSETS_MISSING_TEXT in prompt
+    assert "只提取中文" in prompt or "只提取中文" in prompt.replace(" ", "")
+    assert "多语言" in prompt
+    assert config.CSV_MIN_LINES == 5000
+    sens = eb.build_opencode_resume_prompt(
+        "quality_sensitive",
+        apk_name,
+        snap,
+        hit_lines=6,
+        samples="样例A；样例B",
+    )
+    assert "敏感" in sens
+    assert "6" in sens
     assert eb.classify_csv(config.ASSETS_MISSING_TEXT) == "assets_missing"
     assert eb.classify_csv(config.DECRYPT_FAIL_TEXT + "（超时）") == "decrypt_failed"
     assert eb.classify_csv("text\n真实一行\n") == "success"
@@ -84,12 +97,22 @@ def test_opencode_prompt_and_cmd():
 
 def test_csv_quality():
     import config
-    from csv_quality import check_csv_quality, line_looks_garbled, match_terminal_status
-    from shared.sensitive_words import filter_sensitive_lines
+    from csv_quality import (
+        check_csv_quality,
+        has_extract_content,
+        line_looks_garbled,
+        match_terminal_status,
+    )
+    from shared.sensitive_words import filter_sensitive_lines, scan_sensitive_hits
 
     assert line_looks_garbled("bad\ufffdtext")
     assert line_looks_garbled("Ã¤Â¸Â­Ã¦Â–Â‡xx")
     assert not line_looks_garbled("这是正常中文文本")
+
+    assert not has_extract_content("text\n")
+    assert not has_extract_content("")
+    assert has_extract_content(config.DECRYPT_FAIL_TEXT)
+    assert has_extract_content("text\n真实一行\n")
 
     assert check_csv_quality("text\n") is not None
     assert check_csv_quality("text\n").kind == "empty"
@@ -117,17 +140,20 @@ def test_csv_quality():
     )
     assert check_csv_quality(config.ASSETS_MISSING_TEXT) is None
 
-    # Hallucination: marker plus real body → ignore marker
     halluc = config.ASSETS_MISSING_TEXT + "\n真实任务文本一行\n"
     assert match_terminal_status(halluc) is None
     assert check_csv_quality(halluc) is not None
 
-    words = frozenset({"色情论坛", "一夜性网", "习"})
-    raw = "任务说明\n色情论坛\n正常文本\n一夜性网\n习\n包含色情论坛的长句\n"
+    words = frozenset({"色情论坛", "一夜性网"})
+    raw = "任务说明\n色情论坛\n正常文本\n一夜性网\n包含色情论坛的长句\n短行\n"
     filtered, removed = filter_sensitive_lines(raw, words=words)
     assert removed == 3
-    assert filtered.splitlines() == ["任务说明", "正常文本", "包含色情论坛的长句"]
-    assert check_csv_quality(filtered) is not None
+    assert filtered.splitlines() == ["任务说明", "正常文本", "短行"]
+    hit = scan_sensitive_hits(raw, words=words)
+    assert hit.hit_lines == 3
+    assert hit.hit_lines < config.SENSITIVE_HIT_MIN
+    many = "\n".join([f"含色情论坛{i}" for i in range(config.SENSITIVE_HIT_MIN)])
+    assert scan_sensitive_hits(many, words=words).hit_lines >= config.SENSITIVE_HIT_MIN
     print("CSV_QUALITY_OK", flush=True)
 
 

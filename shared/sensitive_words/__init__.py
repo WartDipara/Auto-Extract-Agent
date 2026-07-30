@@ -1,22 +1,27 @@
 """
-Shared sensitive-word table for post-extract CSV filtering.
+Shared sensitive-word table for post-extract CSV filtering / detection.
 
-Word list file: shared/sensitive_words/sensitive.txt (one word per line).
-Both auto-extract and archive-followup may import this package.
+Word list: shared/sensitive_words/sensitive.txt (one word per line).
+Matching: Aho-Corasick multi-pattern automaton (pyahocorasick).
+Resume hit threshold is configured by callers (SENSITIVE_HIT_MIN).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+
+import ahocorasick
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_SENSITIVE_FILE = _PACKAGE_DIR / "sensitive.txt"
 
-# Skip common table header if present.
 _HEADER_NAMES = frozenset({"name", "word", "text", "敏感词"})
+_MIN_WORD_LEN = 2
 
 _cached_path: Path | None = None
 _cached_words: frozenset[str] | None = None
+_cached_automaton: ahocorasick.Automaton | None = None
 
 
 def sensitive_words_path() -> Path:
@@ -24,8 +29,7 @@ def sensitive_words_path() -> Path:
 
 
 def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
-    """Load word set from disk (cached per path)."""
-    global _cached_path, _cached_words
+    global _cached_path, _cached_words, _cached_automaton
     target = Path(path) if path is not None else DEFAULT_SENSITIVE_FILE
     if _cached_words is not None and _cached_path == target:
         return _cached_words
@@ -33,19 +37,78 @@ def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
     if target.is_file():
         text = target.read_text(encoding="utf-8-sig", errors="replace")
         for raw in text.splitlines():
-            w = raw.strip()
-            if not w or w in _HEADER_NAMES:
+            w = raw.strip().strip(",").strip()
+            if not w or w in _HEADER_NAMES or len(w) < _MIN_WORD_LEN:
                 continue
             words.add(w)
     _cached_path = target
     _cached_words = frozenset(words)
+    _cached_automaton = None
     return _cached_words
 
 
 def clear_sensitive_words_cache() -> None:
-    global _cached_path, _cached_words
+    global _cached_path, _cached_words, _cached_automaton
     _cached_path = None
     _cached_words = None
+    _cached_automaton = None
+
+
+def _build_automaton(words: frozenset[str] | set[str]) -> ahocorasick.Automaton:
+    auto = ahocorasick.Automaton()
+    for w in words:
+        if len(w) >= _MIN_WORD_LEN:
+            auto.add_word(w, w)
+    auto.make_automaton()
+    return auto
+
+
+def _automaton(words: frozenset[str] | set[str]) -> ahocorasick.Automaton:
+    global _cached_automaton, _cached_words
+    if (
+        _cached_automaton is not None
+        and _cached_words is not None
+        and words == _cached_words
+    ):
+        return _cached_automaton
+    auto = _build_automaton(words)
+    if _cached_words is not None and words == _cached_words:
+        _cached_automaton = auto
+    return auto
+
+
+def _line_has_sensitive(line: str, auto: ahocorasick.Automaton) -> bool:
+    for _ in auto.iter(line):
+        return True
+    return False
+
+
+@dataclass(frozen=True)
+class SensitiveHitResult:
+    hit_lines: int
+    samples: tuple[str, ...]
+
+
+def scan_sensitive_hits(
+    text: str,
+    *,
+    words: frozenset[str] | set[str] | None = None,
+    sample_limit: int = 8,
+) -> SensitiveHitResult:
+    """Count content lines that contain at least one sensitive substring."""
+    table = words if words is not None else load_sensitive_words()
+    auto = _automaton(table)
+    hits = 0
+    samples: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line == "text":
+            continue
+        if _line_has_sensitive(line, auto):
+            hits += 1
+            if len(samples) < sample_limit:
+                samples.append(line[:80])
+    return SensitiveHitResult(hit_lines=hits, samples=tuple(samples))
 
 
 def filter_sensitive_lines(
@@ -53,19 +116,16 @@ def filter_sensitive_lines(
     *,
     words: frozenset[str] | set[str] | None = None,
 ) -> tuple[str, int]:
-    """
-    Drop lines whose stripped text exactly equals a sensitive word.
-    Returns (filtered_text, removed_count). Preserves a trailing newline when
-    any content remains.
-    """
+    """Drop lines that contain any sensitive substring. Returns (body, removed)."""
     table = words if words is not None else load_sensitive_words()
+    auto = _automaton(table)
     kept: list[str] = []
     removed = 0
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
             continue
-        if line in table:
+        if line != "text" and _line_has_sensitive(line, auto):
             removed += 1
             continue
         kept.append(line)
@@ -80,10 +140,6 @@ def filter_sensitive_file(
     *,
     words: frozenset[str] | set[str] | None = None,
 ) -> int:
-    """
-    Rewrite CSV/text file in place with sensitive lines removed.
-    Returns removed line count (0 if file missing).
-    """
     path = Path(path)
     if not path.is_file():
         return 0

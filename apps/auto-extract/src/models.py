@@ -7,7 +7,7 @@ STATUSES = (
     "downloaded",
     "preparing",
     "submitting",
-    "waiting_csv",
+    "archiving",
     "success",
     "decrypt_failed",
     "assets_missing",

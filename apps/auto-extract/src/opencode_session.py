@@ -46,13 +46,16 @@ class OpenCodeStopped(RuntimeError):
 
 
 def output_csv_has_content(path: Path | None) -> bool:
+    """True when tests.csv has real extract content or a terminal failure marker."""
     if path is None or not path.is_file():
         return False
     try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace").strip()
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
-    return bool(text)
+    from csv_quality import has_extract_content
+
+    return has_extract_content(text)
 
 
 def export_session_json(

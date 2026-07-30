@@ -45,9 +45,10 @@ CSV_GRACE_SEC = 10.0
 ASSETS_MISSING_TEXT = "资源文本文件在assets里找不到"
 DECRYPT_FAIL_TEXT = "解密失败"
 ABNORMAL_EXIT_TEXT = "异常退出"
-CSV_MIN_LINES = int(os.environ.get("CSV_MIN_LINES", "6000") or "6000")
+CSV_MIN_LINES = int(os.environ.get("CSV_MIN_LINES", "5000") or "5000")
 CSV_GARBLE_MIN_LINES = int(os.environ.get("CSV_GARBLE_MIN_LINES", "10") or "10")
 CSV_GARBLE_RATIO = float(os.environ.get("CSV_GARBLE_RATIO", "0.01") or "0.01")
+SENSITIVE_HIT_MIN = int(os.environ.get("SENSITIVE_HIT_MIN", "5") or "5")
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_TIMEOUT_SEC = 300

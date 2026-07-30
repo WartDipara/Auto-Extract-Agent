@@ -49,7 +49,7 @@ def enqueue_urls(urls: list, source_file: str) -> list:
 def get_next_runnable() -> Task | None:
     with _lock:
         for task in _state.tasks:
-            if task.status in ("downloading", "preparing", "submitting", "waiting_csv"):
+            if task.status in ("downloading", "preparing", "submitting", "archiving"):
                 return task
         for task in _state.tasks:
             if task.status in ("queued", "downloaded"):
