@@ -1,4 +1,4 @@
-"""ChatDeepSeek agent with InMemorySaver. One tool decision per OCR frame."""
+"""UI agent with InMemorySaver. One tool decision per OCR frame."""
 
 from __future__ import annotations
 
@@ -7,11 +7,12 @@ import uuid
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_deepseek import ChatDeepSeek
+from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
 
 from small_agent.config import SmallAgentSettings, load_settings
+from small_agent.llm import build_chat_model
 from small_agent.prompts import (
     SYSTEM_PROMPT,
     TASK_BOOTSTRAP,
@@ -21,16 +22,12 @@ from small_agent.tools import FrameOutcome, FrameSession, TapDevice, build_tools
 
 _log = logging.getLogger(__name__)
 
-# model → tool → model(end). Higher values let splash OCR burn API in a loop.
 _BOOTSTRAP_RECURSION = 4
 _DECIDE_RECURSION = 4
 
 
-def build_llm(settings: SmallAgentSettings | None = None) -> ChatDeepSeek:
-    from small_agent.config import build_llm_kwargs
-
-    cfg = settings or load_settings()
-    return ChatDeepSeek(**build_llm_kwargs(cfg))
+def build_llm(settings: SmallAgentSettings | None = None) -> BaseChatModel:
+    return build_chat_model(settings)
 
 
 def ocr_worth_decide(items: list[Any]) -> bool:
@@ -51,7 +48,7 @@ class UiAgentSession:
         *,
         thread_id: str | None = None,
         settings: SmallAgentSettings | None = None,
-        llm: ChatDeepSeek | None = None,
+        llm: BaseChatModel | None = None,
         agent: Any | None = None,
     ):
         if settings is not None:
@@ -66,7 +63,7 @@ class UiAgentSession:
         if agent is not None:
             self._agent = agent
         else:
-            model = llm or build_llm(self._settings)
+            model = llm or build_chat_model(self._settings)
             self._agent = create_agent(
                 model=model,
                 tools=build_tools(self._frame),

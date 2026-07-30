@@ -1,7 +1,12 @@
+"""Connectivity probe before OCR navigation."""
+
 from __future__ import annotations
+
 import logging
 import re
-from langchain_deepseek import ChatDeepSeek
+
+from langchain_core.language_models.chat_models import BaseChatModel
+
 from small_agent.config import load_settings
 from small_agent.prompts import PING_PROMPT
 
@@ -9,17 +14,17 @@ _log = logging.getLogger(__name__)
 _OK_RE = re.compile(r"\b(OK|pong)\b", re.IGNORECASE)
 
 
-def ping_model(llm: ChatDeepSeek | None = None) -> bool:
+def ping_model(llm: BaseChatModel | None = None) -> bool:
     """Return True if model replies with OK or pong."""
     if llm is None:
         settings = load_settings()
         if not settings.api_key:
-            _log.error("DEEPSEEK_API_KEY missing in .env")
-            print("small_agent ping failed: no DEEPSEEK_API_KEY", flush=True)
+            _log.error("API_KEY missing in .env")
+            print("small_agent ping failed: no API_KEY", flush=True)
             return False
-        from small_agent.agent import build_llm
+        from small_agent.llm import build_chat_model
 
-        model = build_llm(settings)
+        model = build_chat_model(settings)
     else:
         model = llm
     try:

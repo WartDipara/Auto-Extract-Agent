@@ -117,6 +117,15 @@ def test_tools_tap_wait_done():
     print("SMALL_AGENT_TOOLS_OK", flush=True)
 
 
+def test_llm_routing_helpers():
+    from small_agent.llm import _bare_model_id
+
+    assert _bare_model_id("deepseek:deepseek-v4-flash") == "deepseek-v4-flash"
+    assert _bare_model_id("openai:gpt-4o-mini") == "gpt-4o-mini"
+    assert _bare_model_id("MiniMax-Text-01") == "MiniMax-Text-01"
+    print("SMALL_AGENT_LLM_ROUTE_OK", flush=True)
+
+
 def test_ping_without_key():
     import small_agent.config as cfg
     import small_agent.healthcheck as hc
@@ -128,7 +137,8 @@ def test_ping_without_key():
     def _no_key() -> SmallAgentSettings:
         return SmallAgentSettings(
             api_key="",
-            model_id="deepseek-chat",
+            model_id="deepseek:deepseek-chat",
+            base_url=None,
         )
 
     cfg.load_settings = _no_key  # type: ignore[assignment]
@@ -187,6 +197,7 @@ if __name__ == "__main__":
     test_ocr_worth_decide()
     test_tools_one_shot_lock()
     test_tools_tap_wait_done()
+    test_llm_routing_helpers()
     test_ping_without_key()
     test_ping_ok_reply()
     test_ui_agent_decide_with_fake_agent()
