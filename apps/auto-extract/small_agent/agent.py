@@ -1,10 +1,16 @@
+"""ChatDeepSeek agent with InMemorySaver. One tool decision per OCR frame."""
+
 from __future__ import annotations
+
 import logging
 import uuid
 from typing import Any
+
 from langchain.agents import create_agent
 from langchain_deepseek import ChatDeepSeek
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.errors import GraphRecursionError
+
 from small_agent.config import SmallAgentSettings, load_settings
 from small_agent.prompts import (
     SYSTEM_PROMPT,
@@ -15,12 +21,27 @@ from small_agent.tools import FrameOutcome, FrameSession, TapDevice, build_tools
 
 _log = logging.getLogger(__name__)
 
+# model → tool → model(end). Higher values let splash OCR burn API in a loop.
+_BOOTSTRAP_RECURSION = 4
+_DECIDE_RECURSION = 4
+
 
 def build_llm(settings: SmallAgentSettings | None = None) -> ChatDeepSeek:
     from small_agent.config import build_llm_kwargs
 
     cfg = settings or load_settings()
     return ChatDeepSeek(**build_llm_kwargs(cfg))
+
+
+def ocr_worth_decide(items: list[Any]) -> bool:
+    """Skip LLM on splash crumbs (e.g. '/' / 'AG') with no real UI text."""
+    for item in items:
+        text = (getattr(item, "text", "") or "").strip()
+        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+            return True
+        if len(text) >= 4:
+            return True
+    return False
 
 
 class UiAgentSession:
@@ -41,7 +62,6 @@ class UiAgentSession:
             self._settings = None
         self._frame = FrameSession(adb=adb)
         self._thread_id = thread_id or f"prep-{uuid.uuid4().hex[:12]}"
-        self._invoke_config = {"configurable": {"thread_id": self._thread_id}}
         self._bootstrapped = False
         if agent is not None:
             self._agent = agent
@@ -58,12 +78,18 @@ class UiAgentSession:
     def thread_id(self) -> str:
         return self._thread_id
 
+    def _config(self, recursion_limit: int) -> dict:
+        return {
+            "configurable": {"thread_id": self._thread_id},
+            "recursion_limit": recursion_limit,
+        }
+
     def bootstrap(self) -> None:
         if self._bootstrapped:
             return
         self._agent.invoke(
             {"messages": [{"role": "user", "content": TASK_BOOTSTRAP}]},
-            self._invoke_config,
+            self._config(_BOOTSTRAP_RECURSION),
         )
         self._bootstrapped = True
         print("small_agent bootstrap done", flush=True)
@@ -75,13 +101,20 @@ class UiAgentSession:
         poll: int,
         note: str = "",
     ) -> FrameOutcome:
+        if not ocr_worth_decide(items):
+            print(f"ocr gate skip llm (sparse ocr) poll={poll}", flush=True)
+            return FrameOutcome(kind="wait")
+
         self._frame.set_items(items)
         content = format_ocr_user_message(items, poll=poll, note=note)
         try:
             self._agent.invoke(
                 {"messages": [{"role": "user", "content": content}]},
-                self._invoke_config,
+                self._config(_DECIDE_RECURSION),
             )
+        except GraphRecursionError:
+            _log.warning("small_agent decide hit recursion_limit poll=%s", poll)
+            print("small_agent decide: recursion_limit (using last tool)", flush=True)
         except Exception as exc:
             _log.warning("small_agent decide failed: %s", exc)
             print(f"small_agent decide error: {exc}", flush=True)

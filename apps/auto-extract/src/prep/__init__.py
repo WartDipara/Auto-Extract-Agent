@@ -145,6 +145,7 @@ def run_device_prep(
                     package_name=package_name,
                     timeout_sec=min(remaining, float(config.PREP_OCR_TIMEOUT_SEC)),
                     poll_sec=config.PREP_OCR_POLL_SEC,
+                    agent_interval_sec=float(config.PREP_AGENT_INTERVAL_SEC),
                     foreground_poll_sec=float(config.PREP_FOREGROUND_POLL_SEC),
                 )
                 stage(f"entry screen reached: {screen_reached}")

@@ -68,6 +68,31 @@ def test_foreground_watch_apply():
     print("FOREGROUND_WATCH_OK", flush=True)
 
 
+def test_ocr_worth_decide():
+    from small_agent.agent import ocr_worth_decide
+
+    assert not ocr_worth_decide([])
+    assert not ocr_worth_decide([FakeOcr("/", 1, 1), FakeOcr("AG", 2, 2)])
+    assert ocr_worth_decide([FakeOcr("同意并进入", 10, 20)])
+    assert ocr_worth_decide([FakeOcr("Login", 10, 20)])
+    print("OCR_WORTH_DECIDE_OK", flush=True)
+
+
+def test_tools_one_shot_lock():
+    from small_agent.tools import FrameSession, build_tools
+
+    adb = FakeAdb()
+    session = FrameSession(adb=adb)
+    session.set_items([FakeOcr("同意", 100, 200)])
+    tools = {t.name: t for t in build_tools(session)}
+    tools["tap_item"].invoke({"item_id": 0})
+    second = tools["wait"].invoke({})
+    assert "already decided" in second
+    assert session.outcome is not None and session.outcome.kind == "tap"
+    assert len(adb.taps) == 1
+    print("SMALL_AGENT_TOOL_LOCK_OK", flush=True)
+
+
 def test_tools_tap_wait_done():
     from small_agent.tools import FrameSession, build_tools
 
@@ -84,6 +109,7 @@ def test_tools_tap_wait_done():
     assert tools["wait"].invoke({}) == "waiting"
     assert session.outcome is not None and session.outcome.kind == "wait"
 
+    session.set_items([FakeOcr("登录", 1, 1)])
     assert tools["done"].invoke({"scene": "login"}).endswith("login")
     assert session.outcome is not None
     assert session.outcome.kind == "done"
@@ -158,6 +184,8 @@ if __name__ == "__main__":
     except Exception:
         pass
     test_foreground_watch_apply()
+    test_ocr_worth_decide()
+    test_tools_one_shot_lock()
     test_tools_tap_wait_done()
     test_ping_without_key()
     test_ping_ok_reply()

@@ -30,11 +30,22 @@ class FrameSession:
 
 
 def build_tools(session: FrameSession) -> list[Any]:
+    def _already_done() -> str | None:
+        if session.outcome is None:
+            return None
+        return (
+            f"already decided this frame as {session.outcome.kind}; "
+            "do not call more tools"
+        )
+
     @tool
     def tap_item(item_id: int) -> str:
         """Tap the OCR item center by id from the current frame list."""
+        blocked = _already_done()
+        if blocked:
+            return blocked
         if item_id < 0 or item_id >= len(session.items):
-            return f"invalid item_id={item_id}; valid 0..{len(session.items) - 1}"
+            return f"invalid item_id={item_id}; call wait instead"
         item = session.items[item_id]
         session.adb.tap(item.cx, item.cy)
         session.outcome = FrameOutcome(
@@ -50,12 +61,18 @@ def build_tools(session: FrameSession) -> list[Any]:
     @tool
     def wait() -> str:
         """Do not tap; wait for download progress or clearer UI."""
+        blocked = _already_done()
+        if blocked:
+            return blocked
         session.outcome = FrameOutcome(kind="wait")
         return "waiting"
 
     @tool
     def done(scene: str) -> str:
         """Entry screen reached. scene: login | start_game | server_select | entry."""
+        blocked = _already_done()
+        if blocked:
+            return blocked
         scene_key = (scene or "").strip().lower()
         if scene_key not in _VALID_SCENES:
             scene_key = "entry"
