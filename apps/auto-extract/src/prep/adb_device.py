@@ -147,6 +147,33 @@ class AdbDevice:
         except RuntimeError as exc:
             _log.warning("force-stop failed: %s", exc)
 
+    def is_package_running(self, package: str) -> bool:
+        """True if package has a live process (pidof)."""
+        try:
+            out = self.shell(f"pidof {package}", timeout=15)
+        except RuntimeError:
+            return False
+        return bool(out.strip())
+
+    def foreground_package(self) -> str:
+        """Best-effort current focus package name, or empty."""
+        try:
+            out = self.shell("dumpsys window", timeout=15)
+        except RuntimeError:
+            return ""
+        # mCurrentFocus=Window{... com.pkg/com.pkg.Activity}
+        for line in out.splitlines():
+            if "mCurrentFocus=" not in line and "mFocusedApp=" not in line:
+                continue
+            match = re.search(r"([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+", line)
+            if match:
+                return match.group(1)
+        return ""
+
+    def bring_to_foreground(self, package: str):
+        """Resume launcher activity for package (same as launch)."""
+        self.launch_package(package)
+
     def screencap(self, dest: Path):
         dest.parent.mkdir(parents=True, exist_ok=True)
         remote = "/sdcard/__aea_prep_cap.png"

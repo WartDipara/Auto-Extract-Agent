@@ -27,6 +27,7 @@ OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 
 PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
+PREP_FOREGROUND_POLL_SEC = 1.5
 
 OPENCODE_CMD = os.environ.get("OPENCODE_CMD", "opencode").strip() or "opencode"
 OPENCODE_SKILL = "get-game-text-skill"

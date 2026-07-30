@@ -4,11 +4,11 @@ import time
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parent
+_APP = _SRC.parent
 _REPO = _SRC.parent.parent.parent  # Auto-Extract-Agent
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
+for _p in (_APP, _SRC, _REPO):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import config
 from config import assert_extract_agent_ready, ensure_dirs

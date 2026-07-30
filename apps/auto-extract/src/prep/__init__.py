@@ -142,8 +142,10 @@ def run_device_prep(
             try:
                 screen_reached = wait_until_entry_screen(
                     adb,
+                    package_name=package_name,
                     timeout_sec=min(remaining, float(config.PREP_OCR_TIMEOUT_SEC)),
                     poll_sec=config.PREP_OCR_POLL_SEC,
+                    foreground_poll_sec=float(config.PREP_FOREGROUND_POLL_SEC),
                 )
                 stage(f"entry screen reached: {screen_reached}")
             except TimeoutError:

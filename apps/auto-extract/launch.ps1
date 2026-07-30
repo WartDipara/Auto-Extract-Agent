@@ -6,7 +6,7 @@ $AppRoot = $PSScriptRoot
 $Src = Join-Path $AppRoot "src"
 $RepoRoot = (Resolve-Path (Join-Path $AppRoot "..\..")).Path
 $env:PYTHONUTF8 = "1"
-$env:PYTHONPATH = "$Src;$RepoRoot"
+$env:PYTHONPATH = "$AppRoot;$Src;$RepoRoot"
 Set-Location $AppRoot
 Write-Host "Auto-Extract-Agent / auto-extract"
 Write-Host "  app:  $AppRoot"
