@@ -15,7 +15,7 @@ _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
 _APP = _REPO / "apps" / "auto-extract"
 _SRC = _APP / "src"
-for p in (_SRC, _REPO):
+for p in (_APP, _SRC, _REPO):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
