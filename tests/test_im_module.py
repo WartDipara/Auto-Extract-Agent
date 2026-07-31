@@ -62,6 +62,25 @@ def test_find_by_source():
     assert a is None and d["status"] == "success"
 
 
+def test_create_channel_routes(monkeypatch):
+    from channels.factory import create_channel
+
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "sec")
+    ch = create_channel("feishu")
+    assert ch.__class__.__name__ == "FeishuChannel"
+    try:
+        create_channel("dingtalk")
+        assert False, "expected SystemExit"
+    except SystemExit as exc:
+        assert "dingtalk" in str(exc).lower() or "reserved" in str(exc).lower()
+    try:
+        create_channel("unknown")
+        assert False, "expected SystemExit"
+    except SystemExit:
+        pass
+
+
 def test_queue_manager_snapshot(tmp_path, monkeypatch):
     import config
     import queue_manager as qm

@@ -13,6 +13,9 @@ _AUTO = _REPO_ROOT / "apps" / "auto-extract"
 
 load_dotenv(_APP_ROOT / ".env")
 
+# feishu | dingtalk (aliases: lark | dingding)
+IM_CHANNEL = os.environ.get("IM_CHANNEL", "feishu").strip().lower() or "feishu"
+
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
 
