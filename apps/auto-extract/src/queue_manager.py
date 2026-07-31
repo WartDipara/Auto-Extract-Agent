@@ -1,7 +1,12 @@
+"""In-memory task queue with disk snapshot for external readers (IM module)."""
+
+from __future__ import annotations
+
 import datetime
 import json
 import logging
 import threading
+from pathlib import Path
 
 import config
 from models import QueueState, Task
@@ -21,6 +26,7 @@ _TERMINAL = frozenset(
 
 _state = QueueState()
 _lock = threading.Lock()
+_recent_done: list[dict] = []
 
 
 def load():
@@ -28,6 +34,51 @@ def load():
     with _lock:
         _state.next_seq = 1
         _state.tasks = []
+        _recent_done.clear()
+        _write_status_unlocked()
+
+
+def _task_to_dict(task: Task) -> dict:
+    return {
+        "task_id": task.task_id,
+        "url": task.url,
+        "source_file": task.source_file,
+        "filename": task.filename,
+        "label": task.label,
+        "status": task.status,
+        "error": task.error,
+        "result_csv": task.result_csv,
+        "session_id": task.session_id,
+        "buf_done_zip": _buf_done_zip_for(task.result_csv),
+    }
+
+
+def _buf_done_zip_for(result_csv: str) -> str:
+    if not result_csv:
+        return ""
+    stem = Path(result_csv).stem
+    return str((config.BUF_DONE_DIR / f"{stem}.zip").resolve())
+
+
+def _write_status_unlocked() -> None:
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "active": [_task_to_dict(t) for t in _state.tasks],
+        "recent_done": list(_recent_done),
+    }
+    path = config.QUEUE_STATUS_FILE
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _push_recent_done(task: Task) -> None:
+    row = _task_to_dict(task)
+    row["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+    _recent_done.insert(0, row)
+    max_n = max(1, int(config.QUEUE_RECENT_DONE_MAX))
+    del _recent_done[max_n:]
 
 
 def enqueue_urls(urls: list, source_file: str) -> list:
@@ -43,6 +94,7 @@ def enqueue_urls(urls: list, source_file: str) -> list:
             _state.tasks.append(task)
             created.append(task)
             _log.info("enqueued %s %s", task_id, url)
+        _write_status_unlocked()
         return created
 
 
@@ -65,8 +117,18 @@ def update_task(task_id: str, **fields) -> Task | None:
             for key, value in fields.items():
                 setattr(task, key, value)
             if task.status in _TERMINAL:
+                _push_recent_done(task)
                 _state.tasks.pop(idx)
+            _write_status_unlocked()
             return task
+        return None
+
+
+def get_task(task_id: str) -> Task | None:
+    with _lock:
+        for task in _state.tasks:
+            if task.task_id == task_id:
+                return task
         return None
 
 

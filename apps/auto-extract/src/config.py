@@ -25,6 +25,9 @@ STATE_DIR = APP_ROOT / "state"
 PROCESSED_DIR = STATE_DIR / "processed"
 SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
+QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
+QUEUE_RECENT_DONE_MAX = int(os.environ.get("QUEUE_RECENT_DONE_MAX", "50") or "50")
+
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 
 PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
