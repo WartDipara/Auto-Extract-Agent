@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from pathlib import Path
+from time import monotonic
+from typing import Callable
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
@@ -12,11 +15,67 @@ from lark_oapi.api.im.v1 import (
     CreateFileRequestBody,
     CreateMessageRequest,
     CreateMessageRequestBody,
+    EventMessage,
+    EventSender,
 )
 
 from channels.base import MessageHandler
 
 _log = logging.getLogger(__name__)
+
+
+class _SeenIds:
+    """TTL-bounded dedup cache keyed by message_id (Feishu may re-push events)."""
+
+    def __init__(self, ttl: float = 300, maxlen: int = 200):
+        self._ttl = ttl
+        self._maxlen = maxlen
+        self._order: deque[tuple[float, str]] = deque()
+        self._ids: set[str] = set()
+
+    def is_duplicate(self, message_id: str | None) -> bool:
+        if not message_id:
+            return False
+        now = monotonic()
+        while self._order and self._order[0][0] < now - self._ttl:
+            _, old = self._order.popleft()
+            self._ids.discard(old)
+        if message_id in self._ids:
+            return True
+        self._ids.add(message_id)
+        self._order.append((now, message_id))
+        while len(self._order) > self._maxlen:
+            _, old = self._order.popleft()
+            self._ids.discard(old)
+        return False
+
+
+# Trigger rules: a message is handled only when every rule passes.
+# Adding a future rule = append one function here; _dispatch never changes.
+_TRIGGER_RULES: list[Callable[[EventMessage, EventSender], bool]] = []
+
+
+def _register_rule(
+    fn: Callable[[EventMessage, EventSender], bool],
+) -> Callable[[EventMessage, EventSender], bool]:
+    _TRIGGER_RULES.append(fn)
+    return fn
+
+
+@_register_rule
+def _rule_user_sender(msg: EventMessage, sender: EventSender) -> bool:
+    """Only users may trigger the bot (blocks bot-to-bot loops)."""
+    return sender.sender_type == "user"
+
+
+@_register_rule
+def _rule_mention_or_p2p(msg: EventMessage, sender: EventSender) -> bool:
+    """p2p direct chats pass; group chats require a bot mention."""
+    if msg.chat_type == "p2p":
+        return True
+    if msg.chat_type != "group":
+        return False
+    return any(m.mentioned_type == "bot" for m in (msg.mentions or []))
 
 
 class FeishuChannel:
@@ -31,24 +90,15 @@ class FeishuChannel:
             .build()
         )
         self._on_message: MessageHandler | None = None
+        self._seen = _SeenIds()
 
     def start(self, on_message: MessageHandler) -> None:
         self._on_message = on_message
 
-        def _handle(data: lark.im.v1.P2ImMessageReceiveV1) -> None:
-            try:
-                chat_id, text = _parse_receive(data)
-                if not chat_id or text is None:
-                    return
-                if self._on_message:
-                    self._on_message(chat_id, text)
-            except Exception:
-                _log.exception("feishu message handler failed")
-
         # Official: builder("", "") for long connection (no encrypt/token).
         event_handler = (
             lark.EventDispatcherHandler.builder("", "")
-            .register_p2_im_message_receive_v1(_handle)
+            .register_p2_im_message_receive_v1(self._dispatch)
             .build()
         )
         cli = lark.ws.Client(
@@ -59,6 +109,23 @@ class FeishuChannel:
         )
         _log.info("feishu websocket starting")
         cli.start()
+
+    def _dispatch(self, data: lark.im.v1.P2ImMessageReceiveV1) -> None:
+        try:
+            event = data.event
+            if event is None or event.message is None or event.sender is None:
+                return
+            if self._seen.is_duplicate(event.message.message_id):
+                return
+            if not all(rule(event.message, event.sender) for rule in _TRIGGER_RULES):
+                return
+            chat_id, text = _parse_receive(data)
+            if not chat_id or text is None:
+                return
+            if self._on_message:
+                self._on_message(chat_id, text)
+        except Exception:
+            _log.exception("feishu message handler failed")
 
     def reply_text(self, chat_id: str, text: str) -> None:
         body = CreateMessageRequestBody.builder().receive_id(chat_id).msg_type(
