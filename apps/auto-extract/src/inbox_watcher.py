@@ -1,6 +1,7 @@
 import json
 import logging
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from router import dispatch
 _log = logging.getLogger(__name__)
 
 _SETTLE_SEC = 0.4
+_RESCAN_SEC = 3.0
 _PROCESSING = set()
 
 
@@ -73,10 +75,26 @@ class _InboxHandler(FileSystemEventHandler):
             return
         _process_file(Path(event.src_path))
 
+    def on_moved(self, event):
+        if event.is_directory:
+            return
+        # im-module writes atomically: tmp file renamed to *.json — a rename
+        # only surfaces here on Windows (no on_created for the final name).
+        _process_file(Path(event.dest_path))
+
 
 def scan_existing():
     for path in sorted(config.INBOX_DIR.glob("*.json")):
         _process_file(path)
+
+
+def _rescan_loop():
+    while True:
+        time.sleep(_RESCAN_SEC)
+        try:
+            scan_existing()
+        except Exception:
+            _log.exception("inbox rescan failed")
 
 
 def start_watcher() -> Observer:
@@ -84,5 +102,6 @@ def start_watcher() -> Observer:
     observer = Observer()
     observer.schedule(_InboxHandler(), str(config.INBOX_DIR), recursive=False)
     observer.start()
+    threading.Thread(target=_rescan_loop, name="inbox-rescan", daemon=True).start()
     _log.info("watching inbox: %s", config.INBOX_DIR)
     return observer
