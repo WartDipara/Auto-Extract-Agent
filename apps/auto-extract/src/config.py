@@ -19,6 +19,7 @@ WORKSPACE_ROOT = APP_ROOT / "workspace"
 INBOX_DIR = APP_ROOT / "inbox"
 DOWNLOADS_DIR = APP_ROOT / "downloads"
 RESULT_DIR = APP_ROOT / "result"
+BUF_DONE_DIR = APP_ROOT / "buf_done"
 LOGS_DIR = APP_ROOT / "logs"
 STATE_DIR = APP_ROOT / "state"
 PROCESSED_DIR = STATE_DIR / "processed"
@@ -50,6 +51,10 @@ CSV_MIN_LINES = int(os.environ.get("CSV_MIN_LINES", "5000") or "5000")
 CSV_GARBLE_MIN_LINES = int(os.environ.get("CSV_GARBLE_MIN_LINES", "10") or "10")
 CSV_GARBLE_RATIO = float(os.environ.get("CSV_GARBLE_RATIO", "0.01") or "0.01")
 SENSITIVE_HIT_MIN = int(os.environ.get("SENSITIVE_HIT_MIN", "5") or "5")
+# Extra OpenCode review when extract is huge (garbled / banned words).
+CSV_LARGE_REVIEW_LINES = int(
+    os.environ.get("CSV_LARGE_REVIEW_LINES", "300000") or "300000"
+)
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_TIMEOUT_SEC = 300
@@ -71,6 +76,7 @@ def ensure_dirs():
         INBOX_DIR,
         DOWNLOADS_DIR,
         RESULT_DIR,
+        BUF_DONE_DIR,
         LOGS_DIR,
         STATE_DIR,
         PROCESSED_DIR,

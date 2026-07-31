@@ -81,6 +81,17 @@ def test_opencode_prompt_and_cmd():
     assert "注释" in review or "调试" in review
     assert "错误提取" in review
     assert "富文本" in review or "color" in review
+    large = eb.build_opencode_resume_prompt(
+        "large_csv_review",
+        apk_name,
+        snap,
+        line_count=350000,
+        large_lines=config.CSV_LARGE_REVIEW_LINES,
+    )
+    assert "乱码" in large
+    assert "违禁" in large or "敏感" in large
+    assert "350000" in large
+    assert str(config.CSV_LARGE_REVIEW_LINES) in large
     assert config.ASSETS_MISSING_TEXT in prompt
     assert "只提取中文" in prompt or "只提取中文" in prompt.replace(" ", "")
     assert "多语言" in prompt

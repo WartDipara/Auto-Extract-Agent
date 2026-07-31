@@ -8,6 +8,7 @@ import config
 import queue_manager
 from apk_meta import extract_labels, primary_label
 from downloader import download
+from buf_done import enqueue_buf_done, ensure_buf_done_worker
 from extract_bridge import (
     append_session_to_log,
     archive_csv,
@@ -140,6 +141,7 @@ def _process_task(task: Task):
 
             session_id = OpenCodeSessionManager().lookup_session_id(task_key)
         archived = archive_csv(csv_path, task_key, label, body_text)
+        enqueue_buf_done(archived)
         append_session_to_log(filename, session_id)
         err_line = (
             ""
@@ -241,6 +243,7 @@ def ensure_worker():
     with _worker_lock:
         if _worker_started:
             return
+        ensure_buf_done_worker()
         thread = threading.Thread(
             target=_worker_loop,
             name="get-texts-worker",

@@ -12,6 +12,7 @@ for _p in (_APP, _SRC, _REPO):
 
 import config
 from config import assert_extract_agent_ready, ensure_dirs
+from buf_done import ensure_buf_done_worker
 from handlers.get_texts import ensure_worker, handle_get_texts
 from inbox_watcher import scan_existing, start_watcher
 import queue_manager
@@ -42,6 +43,7 @@ def main():
     _log_agent_paths()
     queue_manager.load()
     _register_routes()
+    ensure_buf_done_worker()
     ensure_worker()
     scan_existing()
     observer = start_watcher()

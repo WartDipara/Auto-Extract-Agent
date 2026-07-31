@@ -225,7 +225,7 @@ def build_opencode_prompt(apk_name: str, snap: dict | None = None) -> str:
 def build_opencode_resume_prompt(
     kind: str, apk_name: str, snap: dict | None = None, **extra_slots
 ) -> str:
-    """kind: stall_continue | deadline_persist | missing_output | final_csv_review | quality_*."""
+    """kind: stall_continue | deadline_persist | missing_output | final_csv_review | large_csv_review | quality_*."""
     import prompts as prompt_store
 
     snap = snap or workspace_ready_snapshot()
@@ -409,6 +409,7 @@ def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedPr
     else:
         _ask_final_csv_review(apk_name, snap, _run)
         _resume_quality_gate(mgr, apk_name, snap, task_key, _run)
+        _ask_large_csv_review(apk_name, snap, _run)
 
     end = datetime.datetime.now()
     duration = (end - start).total_seconds()
@@ -623,6 +624,50 @@ def _ask_final_csv_review(apk_name, snap, run_fn):
     )
 
 
+def _content_line_count(text: str) -> int:
+    lines = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line == "text" and lines == 0:
+            continue
+        lines += 1
+    return lines
+
+
+def _ask_large_csv_review(apk_name, snap, run_fn):
+    """If CSV is huge, one extra OpenCode pass focused on garbled / banned words."""
+    from csv_quality import match_terminal_status
+
+    text = _read_tests_csv_text()
+    if match_terminal_status(text) is not None:
+        return
+    line_count = _content_line_count(text)
+    threshold = max(0, int(config.CSV_LARGE_REVIEW_LINES))
+    if line_count <= threshold:
+        return
+    prompt = build_opencode_resume_prompt(
+        "large_csv_review",
+        apk_name,
+        snap,
+        line_count=line_count,
+        large_lines=threshold,
+    )
+    print(
+        f"opencode large_csv_review: lines={line_count} > {threshold}",
+        flush=True,
+    )
+    run_fn(
+        "large_csv_review",
+        prompt,
+        force_new=False,
+        skill=None,
+        use_stall=False,
+    )
+    _apply_sensitive_filter()
+
+
 def _ask_empty_classify(apk_name, snap, run_fn):
     """One OpenCode turn asking for assets_missing or decrypt_failed marker."""
     from csv_quality import check_csv_quality, match_terminal_status
@@ -671,11 +716,58 @@ def classify_csv(text: str) -> str:
 
 
 def archive_csv(csv_path: Path, apk_stem: str, label: str, body_text: str) -> Path:
+    """Write result CSV; split 简/繁 when both sides have lines.
+
+    Pure simplified or pure traditional -> one file (original name + full body).
+    Mixed -> ``{stem}_{label}.csv`` (simplified) + ``{stem}_{label}_T.csv`` (traditional).
+    """
     config.RESULT_DIR.mkdir(parents=True, exist_ok=True)
     safe_label = sanitize_label_for_filename(label)
     dest = config.RESULT_DIR / f"{apk_stem}_{safe_label}.csv"
-    dest.write_text(body_text, encoding="utf-8-sig")
-    _log.info("result csv: %s", dest)
+
+    try:
+        from zh_script import join_csv_body, split_body_text
+
+        split = split_body_text(body_text)
+    except ImportError:
+        _log.warning("hanzidentifier missing; archive without script split")
+        dest.write_text(body_text, encoding="utf-8-sig")
+        _log.info("result csv: %s", dest)
+        return dest
+
+    if split.is_pure:
+        dest.write_text(body_text, encoding="utf-8-sig")
+        _log.info(
+            "result csv (pure script): %s simp=%s trad=%s",
+            dest,
+            len(split.simplified_lines),
+            len(split.traditional_lines),
+        )
+        print(
+            f"result csv: {dest} "
+            f"(pure simp={len(split.simplified_lines)} trad={len(split.traditional_lines)})",
+            flush=True,
+        )
+        return dest
+
+    dest.write_text(join_csv_body(split.simplified_lines), encoding="utf-8-sig")
+    dest_t = config.RESULT_DIR / f"{apk_stem}_{safe_label}_T.csv"
+    dest_t.write_text(join_csv_body(split.traditional_lines), encoding="utf-8-sig")
+    _log.info(
+        "result csv split: %s (%s) + %s (%s)",
+        dest,
+        len(split.simplified_lines),
+        dest_t,
+        len(split.traditional_lines),
+    )
+    print(
+        f"result csv: {dest} ({len(split.simplified_lines)} simplified)",
+        flush=True,
+    )
+    print(
+        f"result csv: {dest_t} ({len(split.traditional_lines)} traditional)",
+        flush=True,
+    )
     return dest
 
 

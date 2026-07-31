@@ -2,6 +2,8 @@
 Shared sensitive-word table for post-extract CSV filtering / detection.
 
 Word list: shared/sensitive_words/sensitive.txt (one word per line).
+Place allowlist: shared/sensitive_words/place_allowlist.txt
+  (common geo / country names excluded; 恐暴涉政 compounds stay).
 Matching: exact full-line match only (整行全字匹配).
 Resume hit threshold is configured by callers (SENSITIVE_HIT_MIN).
 """
@@ -13,11 +15,13 @@ from pathlib import Path
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_SENSITIVE_FILE = _PACKAGE_DIR / "sensitive.txt"
+DEFAULT_PLACE_ALLOWLIST_FILE = _PACKAGE_DIR / "place_allowlist.txt"
 
 _HEADER_NAMES = frozenset({"name", "word", "text", "敏感词"})
 _MIN_WORD_LEN = 2
 
 _cached_path: Path | None = None
+_cached_allow_path: Path | None = None
 _cached_words: frozenset[str] | None = None
 
 
@@ -25,27 +29,50 @@ def sensitive_words_path() -> Path:
     return DEFAULT_SENSITIVE_FILE
 
 
-def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
-    global _cached_path, _cached_words
-    target = Path(path) if path is not None else DEFAULT_SENSITIVE_FILE
-    if _cached_words is not None and _cached_path == target:
-        return _cached_words
+def place_allowlist_path() -> Path:
+    return DEFAULT_PLACE_ALLOWLIST_FILE
+
+
+def _load_word_lines(path: Path) -> set[str]:
     words: set[str] = set()
-    if target.is_file():
-        text = target.read_text(encoding="utf-8-sig", errors="replace")
-        for raw in text.splitlines():
-            w = raw.strip().strip(",").strip()
-            if not w or w in _HEADER_NAMES or len(w) < _MIN_WORD_LEN:
-                continue
-            words.add(w)
+    if not path.is_file():
+        return words
+    text = path.read_text(encoding="utf-8-sig", errors="replace")
+    for raw in text.splitlines():
+        w = raw.strip().strip(",").strip()
+        if not w or w.startswith("#") or w in _HEADER_NAMES or len(w) < _MIN_WORD_LEN:
+            continue
+        words.add(w)
+    return words
+
+
+def load_place_allowlist(path: Path | None = None) -> frozenset[str]:
+    target = Path(path) if path is not None else DEFAULT_PLACE_ALLOWLIST_FILE
+    return frozenset(_load_word_lines(target))
+
+
+def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
+    global _cached_path, _cached_allow_path, _cached_words
+    target = Path(path) if path is not None else DEFAULT_SENSITIVE_FILE
+    allow_path = DEFAULT_PLACE_ALLOWLIST_FILE
+    if (
+        _cached_words is not None
+        and _cached_path == target
+        and _cached_allow_path == allow_path
+    ):
+        return _cached_words
+    words = _load_word_lines(target)
+    words -= _load_word_lines(allow_path)
     _cached_path = target
+    _cached_allow_path = allow_path
     _cached_words = frozenset(words)
     return _cached_words
 
 
 def clear_sensitive_words_cache() -> None:
-    global _cached_path, _cached_words
+    global _cached_path, _cached_allow_path, _cached_words
     _cached_path = None
+    _cached_allow_path = None
     _cached_words = None
 
 
