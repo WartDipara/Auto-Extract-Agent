@@ -9,6 +9,7 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
+import config
 from prep.adb_device import AdbDevice
 from prep.foreground_watch import ForegroundWatch
 from prep.ocr_util import ocr_image, texts_joined
@@ -44,6 +45,8 @@ def wait_until_entry_screen(
         adb,
         package_name,
         poll_sec=foreground_poll_sec,
+        crash_confirm=int(config.PREP_CRASH_CONFIRM),
+        background_confirm=int(config.PREP_BACKGROUND_CONFIRM),
     )
     watch.start()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ui-decide")

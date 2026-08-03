@@ -38,6 +38,11 @@ DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 
 PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
 PREP_FOREGROUND_POLL_SEC = 1.5
+# Consecutive raw observations before acting (Splash/focus gaps are transient).
+PREP_CRASH_CONFIRM = int(os.environ.get("PREP_CRASH_CONFIRM", "3") or "3")
+PREP_BACKGROUND_CONFIRM = int(
+    os.environ.get("PREP_BACKGROUND_CONFIRM", "2") or "2"
+)
 
 OPENCODE_CMD = os.environ.get("OPENCODE_CMD", "opencode").strip() or "opencode"
 OPENCODE_SKILL = "get-game-text-skill"
