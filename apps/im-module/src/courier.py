@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
 from channels.base import Channel
 from inbox_writer import new_request_id, write_inbox_json
 from parser import parse_task_message
-from queue_reader import find_by_source, read_queue_status
+from queue_reader import list_by_source, read_queue_status
 
 _log = logging.getLogger(__name__)
 
@@ -22,7 +22,12 @@ class PendingJob:
     request_id: str
     chat_id: str
     source_file: str
-    delivered: bool = False
+    expected: int
+    delivered_ids: set[str] = field(default_factory=set)
+
+    @property
+    def finished(self) -> bool:
+        return len(self.delivered_ids) >= self.expected
 
 
 class Courier:
@@ -44,20 +49,22 @@ class Courier:
         if payload is None:
             self._channel.reply_text(chat_id, f"JSON 无效。\n{config.OPS_TEMPLATE}")
             return
+        urls = payload["get-texts"]["urls"]
         request_id = new_request_id()
         path = write_inbox_json(config.INBOX_DIR, payload, request_id=request_id)
         job = PendingJob(
             request_id=request_id,
             chat_id=chat_id,
             source_file=path.name,
+            expected=len(urls),
         )
         with self._lock:
             self._jobs[request_id] = job
         self._channel.reply_text(
             chat_id,
-            f"已入队：{path.name}\nurls={len(payload['get-texts']['urls'])}",
+            f"已入队：{path.name}\nurls={len(urls)}",
         )
-        _log.info("submitted %s chat=%s", path.name, chat_id)
+        _log.info("submitted %s chat=%s urls=%s", path.name, chat_id, len(urls))
 
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
@@ -70,41 +77,49 @@ class Courier:
     def _tick(self) -> None:
         status = read_queue_status(config.QUEUE_STATUS_FILE)
         with self._lock:
-            jobs = list(self._jobs.values())
+            jobs = [j for j in self._jobs.values() if not j.finished]
         for job in jobs:
-            if job.delivered:
-                continue
-            active, done = find_by_source(status, job.source_file)
-            if active is not None:
-                continue
-            if done is None:
-                continue
-            st = str(done.get("status") or "")
-            if st == "success":
-                zip_path = Path(str(done.get("buf_done_zip") or ""))
-                if not zip_path.is_file():
-                    age = time.time() - int(job.request_id.split("_")[0])
-                    if age < config.ZIP_WAIT_SEC:
-                        continue
-                    self._channel.reply_text(
-                        job.chat_id,
-                        f"任务成功但 zip 超时未出现：{zip_path.name or '-'}",
-                    )
-                    self._mark_done(job.request_id)
+            _actives, dones = list_by_source(status, job.source_file)
+            for done in dones:
+                task_id = str(done.get("task_id") or "")
+                if not task_id or task_id in job.delivered_ids:
                     continue
-                try:
-                    self._channel.send_file(job.chat_id, zip_path)
-                    self._channel.reply_text(job.chat_id, f"结果已发送：{zip_path.name}")
-                except Exception as exc:
-                    self._channel.reply_text(job.chat_id, f"发送 zip 失败：{exc}")
-                self._mark_done(job.request_id)
-                continue
-            err = done.get("error") or st
-            self._channel.reply_text(job.chat_id, f"任务结束：{st}\n{err}")
-            self._mark_done(job.request_id)
+                if self._deliver_done(job, done):
+                    with self._lock:
+                        job.delivered_ids.add(task_id)
+                        if job.finished:
+                            _log.info(
+                                "job complete %s delivered=%s",
+                                job.source_file,
+                                len(job.delivered_ids),
+                            )
 
-    def _mark_done(self, request_id: str) -> None:
-        with self._lock:
-            job = self._jobs.get(request_id)
-            if job:
-                job.delivered = True
+    def _deliver_done(self, job: PendingJob, done: dict) -> bool:
+        """Handle one finished task. True = consumed (do not retry)."""
+        st = str(done.get("status") or "")
+        task_id = str(done.get("task_id") or "")
+        label = str(done.get("label") or done.get("filename") or task_id)
+        if st == "success":
+            zip_path = Path(str(done.get("buf_done_zip") or ""))
+            if not zip_path.is_file():
+                age = time.time() - int(job.request_id.split("_")[0])
+                if age < config.ZIP_WAIT_SEC:
+                    return False
+                self._channel.reply_text(
+                    job.chat_id,
+                    f"任务成功但结果文件超时未出现：{label} ({zip_path.name or '-'})",
+                )
+                return True
+            try:
+                self._channel.send_file(job.chat_id, zip_path)
+                self._channel.reply_text(
+                    job.chat_id, f"结果已发送：{zip_path.name} ({label})"
+                )
+            except Exception as exc:
+                self._channel.reply_text(
+                    job.chat_id, f"发送结果失败：{label}\n{exc}"
+                )
+            return True
+        err = done.get("error") or st
+        self._channel.reply_text(job.chat_id, f"任务结束：{label}\n{st}\n{err}")
+        return True

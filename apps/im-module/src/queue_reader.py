@@ -23,16 +23,26 @@ def read_queue_status(path: Path) -> dict:
 
 
 def find_by_source(status: dict, source_file: str) -> tuple[dict | None, dict | None]:
-    """Return (active_row, done_row) matching source_file name."""
+    """Return first (active_row, done_row) matching source_file name."""
+    active_rows, done_rows = list_by_source(status, source_file)
+    active = active_rows[0] if active_rows else None
+    done = done_rows[0] if done_rows else None
+    return active, done
+
+
+def list_by_source(
+    status: dict, source_file: str
+) -> tuple[list[dict], list[dict]]:
+    """Return all (active_rows, done_rows) matching source_file name."""
     name = Path(source_file).name
-    active = None
-    for row in status.get("active") or []:
-        if Path(str(row.get("source_file") or "")).name == name:
-            active = row
-            break
-    done = None
-    for row in status.get("recent_done") or []:
-        if Path(str(row.get("source_file") or "")).name == name:
-            done = row
-            break
+    active = [
+        row
+        for row in status.get("active") or []
+        if Path(str(row.get("source_file") or "")).name == name
+    ]
+    done = [
+        row
+        for row in status.get("recent_done") or []
+        if Path(str(row.get("source_file") or "")).name == name
+    ]
     return active, done
