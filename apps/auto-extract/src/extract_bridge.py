@@ -196,8 +196,40 @@ def assert_workspace_ready(task_root: Path | None = None) -> dict:
     return snap
 
 
+def _attach_source_lang(
+    snap: dict,
+    *,
+    labels: dict | None = None,
+    label: str = "",
+) -> dict:
+    """Copy snap and attach label/labels used by prompt language hint."""
+    from apk_meta import primary_label
+
+    out = dict(snap)
+    resolved_labels = labels if labels is not None else out.get("labels") or {}
+    resolved_label = (label or out.get("label") or primary_label(resolved_labels) or "").strip()
+    out["labels"] = resolved_labels
+    out["label"] = resolved_label
+    return out
+
+
+def _render_source_lang_hint(*, labels: dict | None, label: str) -> str:
+    import prompts as prompt_store
+    from apk_meta import resolve_source_lang
+
+    lang = resolve_source_lang(labels)
+    display = label.strip() or "-"
+    return prompt_store.render(
+        f"opencode.source_lang_hint.{lang}",
+        label=display,
+        skill=config.OPENCODE_SKILL,
+    )
+
+
 def _opencode_prompt_slots(apk_name: str, snap: dict) -> dict:
     tests_csv = str(opencode_output_csv())
+    labels = snap.get("labels") or {}
+    label = str(snap.get("label") or "")
     return {
         "skill": config.OPENCODE_SKILL,
         "root": snap["root"],
@@ -209,30 +241,51 @@ def _opencode_prompt_slots(apk_name: str, snap: dict) -> dict:
         "decoded_files": snap["decoded_files"],
         "hotfix_files": snap["hotfix_files"],
         "tests_csv": tests_csv,
+        "label": label or "-",
+        "source_lang_hint": _render_source_lang_hint(labels=labels, label=label),
     }
 
 
-def build_opencode_prompt(apk_name: str, snap: dict | None = None) -> str:
+def build_opencode_prompt(
+    apk_name: str,
+    snap: dict | None = None,
+    *,
+    labels: dict | None = None,
+    label: str = "",
+) -> str:
     """Render opencode.initial from config/prompts.json."""
     import prompts as prompt_store
 
-    snap = snap or workspace_ready_snapshot()
+    snap = _attach_source_lang(
+        snap or workspace_ready_snapshot(),
+        labels=labels,
+        label=label,
+    )
     return prompt_store.render(
         "opencode.initial", **_opencode_prompt_slots(apk_name, snap)
     )
 
 
 def build_opencode_resume_prompt(
-    kind: str, apk_name: str, snap: dict | None = None, **extra_slots
+    kind: str,
+    apk_name: str,
+    snap: dict | None = None,
+    *,
+    labels: dict | None = None,
+    label: str = "",
+    **extra_slots,
 ) -> str:
     """kind: stall_continue | deadline_persist | missing_output | final_csv_review | large_csv_review | quality_*."""
     import prompts as prompt_store
 
-    snap = snap or workspace_ready_snapshot()
+    snap = _attach_source_lang(
+        snap or workspace_ready_snapshot(),
+        labels=labels,
+        label=label,
+    )
     slots = _opencode_prompt_slots(apk_name, snap)
     slots.update(extra_slots)
     return prompt_store.render(f"opencode.resume.{kind}", **slots)
-
 
 def build_opencode_cmd(prompt: str) -> list[str]:
     """Preview helper for tests; production uses OpenCodeSessionManager."""
@@ -279,7 +332,13 @@ def _append_opencode_task_log(
     )
 
 
-def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedProcess:
+def invoke_opencode(
+    apk_name: str,
+    *,
+    task_root: Path,
+    labels: dict | None = None,
+    label: str = "",
+) -> subprocess.CompletedProcess:
     """
     OpenCode 黑盒：一任务一 session；两段 stall 看门狗；缺产物 resume。
     返回前保证 tests.csv 存在（成功内容或解密失败标记）。
@@ -290,7 +349,11 @@ def invoke_opencode(apk_name: str, *, task_root: Path) -> subprocess.CompletedPr
 
     _task_root = Path(task_root).resolve()
     workspace = _task_root
-    snap = assert_workspace_ready(workspace)
+    snap = _attach_source_lang(
+        assert_workspace_ready(workspace),
+        labels=labels,
+        label=label,
+    )
     task_key = Path(apk_name).stem
     layout = task_layout(workspace)
     layout["outputs"].mkdir(parents=True, exist_ok=True)
@@ -689,11 +752,27 @@ def _ask_empty_classify(apk_name, snap, run_fn):
     )
 
 
-def invoke_extract_agent(apk_name: str, *, task_root: Path) -> subprocess.CompletedProcess:
+def invoke_extract_agent(
+    apk_name: str,
+    *,
+    task_root: Path,
+    labels: dict | None = None,
+    label: str = "",
+) -> subprocess.CompletedProcess:
     """Run OpenCode black-box extract."""
-    _log.info("extract agent=opencode apk=%s root=%s", apk_name, task_root)
-    print("extract agent=opencode", flush=True)
-    return invoke_opencode(apk_name, task_root=task_root)
+    _log.info(
+        "extract agent=opencode apk=%s root=%s label=%s",
+        apk_name,
+        task_root,
+        label or "-",
+    )
+    print(f"extract agent=opencode label={label or '-'}", flush=True)
+    return invoke_opencode(
+        apk_name,
+        task_root=task_root,
+        labels=labels,
+        label=label,
+    )
 
 
 def wait_for_csv(apk_name: str, timeout_sec: float | None = None) -> tuple[Path, str]:

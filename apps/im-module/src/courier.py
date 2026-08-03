@@ -13,6 +13,7 @@ from channels.base import Channel
 from inbox_writer import new_request_id, write_inbox_json
 from parser import parse_task_message
 from queue_reader import list_by_source, read_queue_status
+from sheet_sync import commit_sync, is_sync_command, sync_from_bitable
 
 _log = logging.getLogger(__name__)
 
@@ -45,11 +46,50 @@ class Courier:
         self._stop.set()
 
     def on_message(self, chat_id: str, text: str) -> None:
+        if is_sync_command(text):
+            self._handle_sheet_sync(chat_id)
+            return
+
         payload = parse_task_message(text)
         if payload is None:
-            self._channel.reply_text(chat_id, f"JSON 无效。\n{config.OPS_TEMPLATE}")
+            self._channel.reply_text(chat_id, f"无法识别指令。\n{config.OPS_TEMPLATE}")
             return
-        urls = payload["get-texts"]["urls"]
+        self._enqueue_urls(chat_id, payload["get-texts"]["urls"])
+
+    def _handle_sheet_sync(self, chat_id: str) -> None:
+        result = sync_from_bitable()
+        if result.error:
+            self._channel.reply_text(chat_id, result.summary_text())
+            return
+        if not result.queued_urls:
+            commit_sync(result)
+            self._channel.reply_text(chat_id, result.summary_text())
+            return
+
+        batch = max(1, int(config.SHEET_SYNC_BATCH_SIZE))
+        chunks = [
+            result.queued_urls[i : i + batch]
+            for i in range(0, len(result.queued_urls), batch)
+        ]
+        names: list[str] = []
+        for urls in chunks:
+            path = self._enqueue_urls(chat_id, urls, ack=False)
+            names.append(path.name)
+        commit_sync(result)
+        summary = result.summary_text()
+        summary += f"\n已写入 inbox：{', '.join(names)}"
+        self._channel.reply_text(chat_id, summary)
+        _log.info(
+            "sheet sync chat=%s queued=%s files=%s",
+            chat_id,
+            result.queued,
+            names,
+        )
+
+    def _enqueue_urls(
+        self, chat_id: str, urls: list[str], *, ack: bool = True
+    ) -> Path:
+        payload = {"get-texts": {"urls": list(urls)}}
         request_id = new_request_id()
         path = write_inbox_json(config.INBOX_DIR, payload, request_id=request_id)
         job = PendingJob(
@@ -60,11 +100,13 @@ class Courier:
         )
         with self._lock:
             self._jobs[request_id] = job
-        self._channel.reply_text(
-            chat_id,
-            f"已入队：{path.name}\nurls={len(urls)}",
-        )
+        if ack:
+            self._channel.reply_text(
+                chat_id,
+                f"已入队：{path.name}\nurls={len(urls)}",
+            )
         _log.info("submitted %s chat=%s urls=%s", path.name, chat_id, len(urls))
+        return path
 
     def _poll_loop(self) -> None:
         while not self._stop.is_set():

@@ -23,7 +23,24 @@ for p in (_APP, _SRC, _REPO):
 def test_opencode_prompt_and_cmd():
     import config
     import extract_bridge as eb
+    import prompts as prompt_store
+    from apk_meta import resolve_source_lang
     from shared.archive_contract import reset_task_workspace, task_layout
+
+    prompt_store.load_prompts(force_reload=True)
+
+    assert resolve_source_lang({}) == "zh"
+    assert resolve_source_lang(None) == "zh"
+    assert resolve_source_lang({"zh-CN": "测试游戏"}) == "zh"
+    assert (
+        resolve_source_lang({"en": "Pack Leader: The Expedition"}) == "en"
+    )
+    assert (
+        resolve_source_lang(
+            {"zh-CN": "中文名", "en": "Pack Leader: The Expedition"}
+        )
+        == "zh"
+    )
 
     task_root = reset_task_workspace(config.WORKSPACE_ROOT, "_smoke_prompt")
     eb._task_root = task_root
@@ -93,8 +110,8 @@ def test_opencode_prompt_and_cmd():
     assert "350000" in large
     assert str(config.CSV_LARGE_REVIEW_LINES) in large
     assert config.ASSETS_MISSING_TEXT in prompt
-    assert "只提取中文" in prompt or "只提取中文" in prompt.replace(" ", "")
-    assert "多语言" in prompt
+    assert "原语言=中文" in prompt
+    assert "游戏原语言裁定" in prompt
     assert config.CSV_MIN_LINES == 5000
     sens = eb.build_opencode_resume_prompt(
         "quality_sensitive",
@@ -105,6 +122,37 @@ def test_opencode_prompt_and_cmd():
     )
     assert "敏感" in sens
     assert "6" in sens
+
+    zh_prompt = eb.build_opencode_prompt(
+        apk_name,
+        snap,
+        labels={"zh-CN": "测试游戏", "en": "Test Game"},
+        label="测试游戏",
+    )
+    assert "原语言=中文" in zh_prompt
+    assert "测试游戏" in zh_prompt
+
+    en_labels = {"en": "Pack Leader: The Expedition"}
+    en_prompt = eb.build_opencode_prompt(
+        apk_name,
+        snap,
+        labels=en_labels,
+        label="Pack Leader: The Expedition",
+    )
+    assert "原语言=英文" in en_prompt
+    assert "禁止再搜索" in en_prompt or "禁止再搜索/筛选中文" in en_prompt
+    assert "Pack Leader: The Expedition" in en_prompt
+    assert "原语言=中文" not in en_prompt
+
+    en_resume = eb.build_opencode_resume_prompt(
+        "final_csv_review",
+        apk_name,
+        snap,
+        labels=en_labels,
+        label="Pack Leader: The Expedition",
+    )
+    assert "原语言=英文" in en_resume
+
     assert eb.classify_csv(config.ASSETS_MISSING_TEXT) == "assets_missing"
     assert eb.classify_csv(config.DECRYPT_FAIL_TEXT + "（超时）") == "decrypt_failed"
     assert eb.classify_csv("text\n真实一行\n") == "success"

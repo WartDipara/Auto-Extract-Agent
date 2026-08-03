@@ -18,6 +18,17 @@ IM_CHANNEL = os.environ.get("IM_CHANNEL", "feishu").strip().lower() or "feishu"
 
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
+FEISHU_BITABLE_APP_TOKEN = os.environ.get("FEISHU_BITABLE_APP_TOKEN", "").strip()
+FEISHU_BITABLE_TABLE_ID = os.environ.get("FEISHU_BITABLE_TABLE_ID", "").strip()
+FEISHU_SYNC_COMMANDS = tuple(
+    c.strip().lower()
+    for c in (os.environ.get("FEISHU_SYNC_COMMANDS", "同步,sync") or "同步,sync").split(",")
+    if c.strip()
+)
+SHEET_SEEN_FILE = Path(
+    os.environ.get("SHEET_SEEN_FILE", str(_APP_ROOT / "state" / "sheet_seen.json"))
+)
+SHEET_SYNC_BATCH_SIZE = int(os.environ.get("SHEET_SYNC_BATCH_SIZE", "50") or "50")
 
 # DingTalk: Client ID = AppKey, Client Secret = AppSecret; robotCode defaults to AppKey.
 DINGTALK_CLIENT_ID = (
@@ -40,6 +51,8 @@ POLL_SEC = float(os.environ.get("POLL_SEC", "3") or "3")
 ZIP_WAIT_SEC = float(os.environ.get("ZIP_WAIT_SEC", "600") or "600")
 
 OPS_TEMPLATE = (
-    '格式：@机器人 后跟 JSON\n'
+    "用法：\n"
+    "1) @机器人 同步  —— 从多维表格拉取新增下载地址入队\n"
+    "2) @机器人 后跟 JSON\n"
     '{"get-texts":{"urls":["https://example.com/game.apk"]}}'
 )

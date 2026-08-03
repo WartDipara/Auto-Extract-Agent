@@ -56,14 +56,19 @@ def extract_labels(apk_path: Path) -> dict:
     return labels
 
 
+_ZH_LABEL_KEYS = (
+    "zh-CN",
+    "zh-Hans",
+    "zh",
+    "zh-TW",
+    "zh-HK",
+    "zh-Hant",
+)
+
+
 def primary_label(labels: dict) -> str:
     for key in (
-        "zh-CN",
-        "zh-Hans",
-        "zh",
-        "zh-TW",
-        "zh-HK",
-        "zh-Hant",
+        *_ZH_LABEL_KEYS,
         "en",
         "en-US",
         "en-GB",
@@ -76,3 +81,17 @@ def primary_label(labels: dict) -> str:
         if value:
             return value
     return ""
+
+
+def resolve_source_lang(labels: dict | None) -> str:
+    """Game source language from aapt labels: 简体/繁体 > 英文.
+
+    Empty labels → zh (keep legacy Chinese-first default).
+    Non-empty without any zh-* key → en.
+    """
+    if not labels:
+        return "zh"
+    for key in _ZH_LABEL_KEYS:
+        if labels.get(key):
+            return "zh"
+    return "en"

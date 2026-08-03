@@ -12,6 +12,10 @@ apps/auto-extract/state/*
 !apps/auto-extract/logs/.gitkeep
 !apps/auto-extract/state/.gitkeep
 
+# ── IM module runtime ──
+apps/im-module/state/*
+!apps/im-module/state/.gitkeep
+
 # ── Workspace (per-task dirs under workspace/<task_key>/) ──
 apps/auto-extract/workspace/*
 !apps/auto-extract/workspace/.gitkeep
@@ -106,6 +110,7 @@ tmp/
 记录
 # Local DingTalk setup notes (may contain app secrets / chat ids)
 **/dingtalk_note.md
+**/feishu_bitable_note.md
 tests/export_workspace/
 tests/interrupt_workspace/
 tests/test_workspace/*

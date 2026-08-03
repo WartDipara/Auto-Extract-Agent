@@ -118,7 +118,12 @@ def _process_task(task: Task) -> Path | None:
 
         with stage_scope("extract"):
             queue_manager.update_task(task_id, status="submitting", filename=filename)
-            result = invoke_extract_agent(filename, task_root=task_root)
+            result = invoke_extract_agent(
+                filename,
+                task_root=task_root,
+                labels=task.labels,
+                label=label,
+            )
             if result.returncode != 0:
                 _log.error(
                     "opencode nonzero exit %s: %s",
