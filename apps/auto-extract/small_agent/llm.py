@@ -56,8 +56,3 @@ def build_chat_model(settings: SmallAgentSettings | None = None) -> BaseChatMode
     _log.info("small_agent llm init_chat_model model=%s", cfg.model_id)
     print(f"small_agent llm model={cfg.model_id}", flush=True)
     return init_chat_model(cfg.model_id, **common)
-
-
-# Backward-compatible alias used by agent / healthcheck.
-def build_llm(settings: SmallAgentSettings | None = None) -> BaseChatModel:
-    return build_chat_model(settings)

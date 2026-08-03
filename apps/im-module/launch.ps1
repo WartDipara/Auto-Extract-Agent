@@ -1,4 +1,4 @@
-# Launch IM module (Feishu long-connection courier).
+# Launch IM module (Feishu WS or DingTalk Stream courier).
 # Prerequisite: fill apps/im-module/.env ; start Module A separately.
 $ErrorActionPreference = "Stop"
 $AppRoot = $PSScriptRoot

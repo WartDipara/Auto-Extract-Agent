@@ -57,7 +57,7 @@ def _buf_done_zip_for(result_csv: str) -> str:
     if not result_csv:
         return ""
     stem = Path(result_csv).stem
-    return str((config.BUF_DONE_DIR / f"{stem}.zip").resolve())
+    return str((config.BUF_DONE_DIR / f"{stem}.bin").resolve())
 
 
 def _write_status_unlocked() -> None:

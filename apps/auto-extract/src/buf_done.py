@@ -1,12 +1,13 @@
-"""Post-process result CSVs into a single zip under buf_done/ (background)."""
+"""Post-process result CSVs into an encrypted .bin under buf_done/ (background)."""
 
 from __future__ import annotations
 
 import logging
 import queue
 import threading
-import zipfile
 from pathlib import Path
+
+import pyzipper
 
 import config
 
@@ -27,28 +28,42 @@ def collect_result_csvs(primary_csv: Path) -> list[Path]:
     return files
 
 
+def _zip_password() -> bytes:
+    password = (config.ZIP_PASSWORD or "").strip()
+    if not password:
+        raise RuntimeError("ZIP_PASSWORD missing in apps/auto-extract/.env")
+    return password.encode("utf-8")
+
+
 def pack_result_zip(primary_csv: Path, *, out_dir: Path | None = None) -> Path:
-    """Zip primary (+ optional _T) into ``buf_done/{stem}.zip``. Keeps source CSVs."""
+    """Encrypt primary (+ optional _T) into ``buf_done/{stem}.bin``. Keeps source CSVs."""
     primary = Path(primary_csv)
     if not primary.is_file():
         raise FileNotFoundError(primary)
     dest_dir = Path(out_dir) if out_dir is not None else config.BUF_DONE_DIR
     dest_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = dest_dir / f"{primary.stem}.zip"
+    out_path = dest_dir / f"{primary.stem}.bin"
     members = collect_result_csvs(primary)
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    password = _zip_password()
+    with pyzipper.AESZipFile(
+        out_path,
+        "w",
+        compression=pyzipper.ZIP_DEFLATED,
+        encryption=pyzipper.WZ_AES,
+    ) as zf:
+        zf.setpassword(password)
         for path in members:
             zf.write(path, arcname=path.name)
     _log.info(
-        "buf_done zip: %s members=%s",
-        zip_path,
+        "buf_done bin: %s members=%s",
+        out_path,
         [p.name for p in members],
     )
     print(
-        f"buf_done zip: {zip_path} ({len(members)} file{'s' if len(members) != 1 else ''})",
+        f"buf_done bin: {out_path} ({len(members)} file{'s' if len(members) != 1 else ''})",
         flush=True,
     )
-    return zip_path
+    return out_path
 
 
 def _worker_loop():

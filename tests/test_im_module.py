@@ -82,6 +82,16 @@ def test_create_channel_routes(monkeypatch):
 
 
 def test_queue_manager_snapshot(tmp_path, monkeypatch):
+    # Prefer auto-extract config/queue_manager over im-module when paths collide.
+    for p in (str(_A_SRC), str(_A_APP)):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    cfg = sys.modules.get("config")
+    if cfg is not None and "auto-extract" not in (cfg.__file__ or ""):
+        for name in ("config", "queue_manager"):
+            sys.modules.pop(name, None)
+
     import config
     import queue_manager as qm
 
@@ -104,4 +114,4 @@ def test_queue_manager_snapshot(tmp_path, monkeypatch):
     snap = json.loads(config.QUEUE_STATUS_FILE.read_text(encoding="utf-8"))
     assert snap["active"] == []
     assert snap["recent_done"][0]["status"] == "success"
-    assert snap["recent_done"][0]["buf_done_zip"].endswith("stem_label.zip")
+    assert snap["recent_done"][0]["buf_done_zip"].endswith("stem_label.bin")

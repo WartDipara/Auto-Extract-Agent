@@ -26,10 +26,6 @@ _BOOTSTRAP_RECURSION = 4
 _DECIDE_RECURSION = 4
 
 
-def build_llm(settings: SmallAgentSettings | None = None) -> BaseChatModel:
-    return build_chat_model(settings)
-
-
 def ocr_worth_decide(items: list[Any]) -> bool:
     """Skip LLM on splash crumbs (e.g. '/' / 'AG') with no real UI text."""
     for item in items:

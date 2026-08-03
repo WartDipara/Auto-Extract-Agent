@@ -10,9 +10,13 @@ import os
 import shutil
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 APP_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = APP_ROOT.parent.parent
 PROJECT_ROOT = APP_ROOT
+
+load_dotenv(APP_ROOT / ".env")
 
 WORKSPACE_ROOT = APP_ROOT / "workspace"
 
@@ -27,6 +31,8 @@ SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
 QUEUE_RECENT_DONE_MAX = int(os.environ.get("QUEUE_RECENT_DONE_MAX", "50") or "50")
+# Required for buf_done encrypted pack; no hardcoded default.
+ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 

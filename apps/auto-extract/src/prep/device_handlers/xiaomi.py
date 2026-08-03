@@ -4,10 +4,10 @@ import logging
 import re
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 from prep.adb_device import AdbDevice
+from prep.device_router import DefaultHandler
 from prep.ocr_util import find_tap_for_texts, ocr_image
 from prep.screen_coord import resolve_screen_coord_space
 
@@ -22,24 +22,32 @@ _INSTALL_TEXTS = (
     "INSTALL",
     "install",
 )
+_XIAOMI_RE = re.compile(r"xiaomi|redmi|poco")
 
 
-def install_apk_with_xiaomi_monitor(adb: AdbDevice, apk_path: Path, timeout: int = 600):
-    brand = adb.brand()
-    manufacturer = ""
-    try:
-        manufacturer = adb.shell("getprop ro.product.manufacturer").lower()
-    except Exception:
-        pass
-    need_monitor = bool(
-        re.search(r"xiaomi|redmi|poco", brand)
-        or re.search(r"xiaomi|redmi|poco", manufacturer)
-    )
-    stop = threading.Event()
-    thread = None
-    if need_monitor:
+class XiaomiHandler(DefaultHandler):
+    name = "xiaomi"
+
+    def match(self, adb: AdbDevice) -> bool:
+        brand = adb.brand()
+        manufacturer = ""
+        try:
+            manufacturer = adb.shell("getprop ro.product.manufacturer").lower()
+        except Exception:
+            pass
+        return bool(_XIAOMI_RE.search(brand) or _XIAOMI_RE.search(manufacturer))
+
+    def install_apk(
+        self,
+        adb: AdbDevice,
+        apk_path: Path,
+        *,
+        timeout: int = 600,
+        package_name: str | None = None,
+    ) -> None:
         print("install monitor on (xiaomi dialog)", flush=True)
         shot_dir = Path(tempfile.mkdtemp(prefix="install_mon_"))
+        stop = threading.Event()
         thread = threading.Thread(
             target=_monitor_loop,
             args=(adb, stop, shot_dir),
@@ -47,14 +55,13 @@ def install_apk_with_xiaomi_monitor(adb: AdbDevice, apk_path: Path, timeout: int
             daemon=True,
         )
         thread.start()
-        _log.info("xiaomi install monitor started brand=%s", brand or manufacturer)
-    try:
-        print(f"adb install {apk_path.name}", flush=True)
-        adb.install(apk_path, timeout=timeout)
-        print("adb install ok", flush=True)
-    finally:
-        stop.set()
-        if thread is not None:
+        _log.info("xiaomi install monitor started brand=%s", adb.brand())
+        try:
+            print(f"adb install {apk_path.name}", flush=True)
+            adb.install(apk_path, timeout=timeout)
+            print("adb install ok", flush=True)
+        finally:
+            stop.set()
             thread.join(timeout=10)
 
 
@@ -84,7 +91,6 @@ def _monitor_loop(adb: AdbDevice, stop: threading.Event, shot_dir: Path):
                         break
                 except Exception:
                     pass
-        # OCR fallback only every 5th miss — install dialogs are almost always u2-visible
         if not clicked and (not use_u2 or polls % 5 == 0):
             shot = shot_dir / f"install_{polls}.png"
             try:

@@ -2,11 +2,13 @@
 apps/auto-extract/inbox/*
 apps/auto-extract/downloads/*
 apps/auto-extract/result/*
+apps/auto-extract/buf_done/*
 apps/auto-extract/logs/*
 apps/auto-extract/state/*
 !apps/auto-extract/inbox/.gitkeep
 !apps/auto-extract/downloads/.gitkeep
 !apps/auto-extract/result/.gitkeep
+!apps/auto-extract/buf_done/.gitkeep
 !apps/auto-extract/logs/.gitkeep
 !apps/auto-extract/state/.gitkeep
 
@@ -42,6 +44,7 @@ secrets.*
 *.nam
 *.til
 *.zip
+*.bin
 *.7z
 *.rar
 *.tar
@@ -101,6 +104,8 @@ _*.json
 balance.py
 tmp/
 记录
+# Local DingTalk setup notes (may contain app secrets / chat ids)
+**/dingtalk_note.md
 tests/export_workspace/
 tests/interrupt_workspace/
 tests/test_workspace/*

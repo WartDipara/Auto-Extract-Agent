@@ -7,8 +7,9 @@ from pathlib import Path
 import config
 import queue_manager
 from apk_meta import extract_labels, primary_label
-from downloader import download
 from buf_done import enqueue_buf_done, ensure_buf_done_worker
+from downloader import download
+from errors import ErrorInfo, emit, normalize, stage_scope
 from extract_bridge import (
     append_session_to_log,
     archive_csv,
@@ -22,11 +23,8 @@ from extract_bridge import (
 from models import Task
 from prep import run_device_prep
 from shared.archive_contract import (
-    FollowupLockedError,
     clean_result_csv,
-    has_stop,
     mark_module_a_done,
-    mark_stop,
     reset_task_workspace,
     task_layout,
     utc_now,
@@ -55,10 +53,14 @@ def _recover_if_needed(task: Task) -> bool:
     if task.status in ("submitting", "archiving", "preparing"):
         if task.filename:
             cleanup_download_apk(task.filename)
-        queue_manager.update_task(
-            task.task_id,
-            status="failed",
-            error="interrupted mid-pipeline",
+        emit(
+            ErrorInfo(
+                code="PIPELINE_INTERRUPTED",
+                message="interrupted mid-pipeline",
+                stage=task.status,
+                status="failed",
+            ),
+            task=task,
         )
         return True
     return False
@@ -89,29 +91,23 @@ def _ensure_apk(task: Task) -> Path:
     return apk_path
 
 
-def _process_task(task: Task):
+def _process_task(task: Task) -> Path | None:
+    """Run pipeline. Returns task_root when available (for error sinks)."""
     task_id = task.task_id
     filename = ""
+    task_root: Path | None = None
     try:
-        apk_path = _ensure_apk(task)
+        with stage_scope("download"):
+            apk_path = _ensure_apk(task)
         filename = apk_path.name
         task_key = Path(filename).stem
         label = task.label or ""
 
         print(f"task workspace: {task_key}", flush=True)
-        try:
+        with stage_scope("prepare"):
             task_root = reset_task_workspace(config.WORKSPACE_ROOT, task_key)
-        except FollowupLockedError as exc:
-            _log.error("%s", exc)
-            queue_manager.update_task(
-                task_id,
-                status="failed",
-                error=str(exc),
-            )
-            return
-
-        queue_manager.update_task(task_id, status="preparing", filename=filename)
-        prep = run_device_prep(apk_path=apk_path, task_root=task_root)
+            queue_manager.update_task(task_id, status="preparing", filename=filename)
+            prep = run_device_prep(apk_path=apk_path, task_root=task_root)
         _log.info(
             "prep finished package=%s pull=%s hotfix=%s screen=%s",
             prep.package_name,
@@ -120,49 +116,59 @@ def _process_task(task: Task):
             prep.screen_reached,
         )
 
-        queue_manager.update_task(task_id, status="submitting", filename=filename)
-        result = invoke_extract_agent(filename, task_root=task_root)
-        if result.returncode != 0:
-            _log.error(
-                "opencode nonzero exit %s: %s",
-                result.returncode,
-                (result.stderr or result.stdout or "").strip(),
+        with stage_scope("extract"):
+            queue_manager.update_task(task_id, status="submitting", filename=filename)
+            result = invoke_extract_agent(filename, task_root=task_root)
+            if result.returncode != 0:
+                _log.error(
+                    "opencode nonzero exit %s: %s",
+                    result.returncode,
+                    (result.stderr or result.stdout or "").strip(),
+                )
+
+        with stage_scope("archive"):
+            queue_manager.update_task(task_id, status="archiving")
+            ensure_csv_after_agent(filename, result.returncode)
+            csv_path, text = wait_for_csv(filename, timeout_sec=config.CSV_GRACE_SEC)
+            status = classify_csv(text)
+            body_text, session_id = clean_result_csv(text)
+            if not session_id:
+                session_id = read_session_id_from_log(filename)
+            if not session_id:
+                from opencode_session import OpenCodeSessionManager
+
+                session_id = OpenCodeSessionManager().lookup_session_id(task_key)
+            archived = archive_csv(csv_path, task_key, label, body_text)
+            enqueue_buf_done(archived)
+            append_session_to_log(filename, session_id)
+            err_line = ""
+            error_info = None
+            if status != "success":
+                msg = (
+                    body_text.strip().splitlines()[0]
+                    if body_text.strip()
+                    else status
+                )
+                error_info = ErrorInfo(
+                    code=status.upper(),
+                    message=msg,
+                    stage="archive",
+                    status=status,
+                )
+                err_line = error_info.to_line()
+            updated = queue_manager.update_task(
+                task_id,
+                status=status,
+                result_csv=str(archived),
+                session_id=session_id,
+                error=err_line,
             )
+            if updated is not None:
+                queue_manager.append_session_record(updated)
 
-        queue_manager.update_task(task_id, status="archiving")
-        ensure_csv_after_agent(filename, result.returncode)
-        csv_path, text = wait_for_csv(filename, timeout_sec=config.CSV_GRACE_SEC)
-        status = classify_csv(text)
-        body_text, session_id = clean_result_csv(text)
-        if not session_id:
-            session_id = read_session_id_from_log(filename)
-        if not session_id:
-            from opencode_session import OpenCodeSessionManager
-
-            session_id = OpenCodeSessionManager().lookup_session_id(task_key)
-        archived = archive_csv(csv_path, task_key, label, body_text)
-        enqueue_buf_done(archived)
-        append_session_to_log(filename, session_id)
-        err_line = (
-            ""
-            if status == "success"
-            else (body_text.strip().splitlines()[0] if body_text.strip() else status)
-        )
-        updated = queue_manager.update_task(
-            task_id,
-            status=status,
-            result_csv=str(archived),
-            session_id=session_id,
-            error=err_line,
-        )
-        if updated is not None:
-            queue_manager.append_session_record(updated)
-
-        layout = task_layout(task_root)
-        export_path = layout["opencode_export"]
-        write_meta(
-            task_root,
-            {
+            layout = task_layout(task_root)
+            export_path = layout["opencode_export"]
+            meta = {
                 "task_id": task_id,
                 "task_key": task_key,
                 "session_id": session_id or "",
@@ -174,11 +180,13 @@ def _process_task(task: Task):
                 "result_csv": str(archived),
                 "opencode_export": str(export_path) if export_path.is_file() else "",
                 "finished_at": utc_now(),
-            },
-        )
-        if status == "success":
-            mark_module_a_done(task_root)
-            print(f"module A done marker written: {task_key}", flush=True)
+            }
+            if error_info is not None:
+                meta["error_info"] = error_info.to_dict()
+            write_meta(task_root, meta)
+            if status == "success":
+                mark_module_a_done(task_root)
+                print(f"module A done marker written: {task_key}", flush=True)
 
         print(
             f"module A task finished: {task_key} status={status} "
@@ -192,8 +200,16 @@ def _process_task(task: Task):
             label or "-",
             session_id or "-",
         )
+        return task_root
     finally:
         cleanup_download_apk(filename)
+
+
+def _task_root_for(task: Task) -> Path | None:
+    if not task.filename:
+        return None
+    root = config.WORKSPACE_ROOT / Path(task.filename).stem
+    return root if root.is_dir() else None
 
 
 def _worker_loop():
@@ -204,37 +220,15 @@ def _worker_loop():
             continue
         if _recover_if_needed(task):
             continue
+        task_root: Path | None = None
         try:
-            _process_task(task)
-        except TimeoutError as exc:
-            _log.error("%s", exc)
-            queue_manager.update_task(
-                task.task_id,
-                status="timeout",
-                error=str(exc),
-            )
+            task_root = _process_task(task)
         except Exception as exc:
-            from opencode_session import OpenCodeStopped
-
-            if isinstance(exc, OpenCodeStopped):
-                _log.warning("task %s stopped: %s", task.task_id, exc)
-                # Ensure .stop exists so the purge script can reclaim the workspace.
-                task_key = Path(task.filename or "").stem
-                if task_key:
-                    root = config.WORKSPACE_ROOT / task_key
-                    if root.is_dir() and not has_stop(root):
-                        mark_stop(root)
-                queue_manager.update_task(
-                    task.task_id,
-                    status="failed",
-                    error=str(exc),
-                )
-                continue
-            _log.exception("task %s failed: %s", task.task_id, exc)
-            queue_manager.update_task(
-                task.task_id,
-                status="failed",
-                error=str(exc),
+            info = normalize(exc)
+            emit(
+                info,
+                task=task,
+                task_root=task_root or _task_root_for(task),
             )
 
 

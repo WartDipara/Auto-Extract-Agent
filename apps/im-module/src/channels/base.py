@@ -1,4 +1,9 @@
-"""Channel protocol — Feishu today, DingTalk later without touching courier."""
+"""Channel protocol — Feishu / DingTalk adapters; courier stays channel-agnostic.
+
+chat_id is opaque per channel:
+- Feishu: native chat_id
+- DingTalk: group:{openConversationId} or oto:{staffId}
+"""
 
 from __future__ import annotations
 

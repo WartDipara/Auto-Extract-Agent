@@ -5,8 +5,12 @@ import re
 import subprocess
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import config
+
+if TYPE_CHECKING:
+    from prep.device_router import DeviceHandler
 
 _log = logging.getLogger(__name__)
 
@@ -15,6 +19,7 @@ class AdbDevice:
     def __init__(self, serial: str | None = None):
         self.serial = serial or ""
         self.adb = config.ADB_CMD
+        self._device_handler: DeviceHandler | None = None
 
     def _base(self) -> list[str]:
         cmd = [self.adb]
@@ -73,8 +78,22 @@ class AdbDevice:
                 f"multiple adb devices {devices}; set ADB_SERIAL to pick one"
             )
         self.serial = devices[0]
+        self._device_handler = None
         _log.info("using adb device %s", self.serial)
         return self.serial
+
+    @property
+    def device_handler(self) -> DeviceHandler:
+        if self._device_handler is None:
+            from prep.device_router import dispatch
+
+            self._device_handler = dispatch(self)
+            _log.info(
+                "device handler %s serial=%s",
+                self._device_handler.name,
+                self.serial or "",
+            )
+        return self._device_handler
 
     def brand(self) -> str:
         try:
@@ -161,14 +180,7 @@ class AdbDevice:
             out = self.shell("dumpsys window", timeout=15)
         except RuntimeError:
             return ""
-        # mCurrentFocus=Window{... com.pkg/com.pkg.Activity}
-        for line in out.splitlines():
-            if "mCurrentFocus=" not in line and "mFocusedApp=" not in line:
-                continue
-            match = re.search(r"([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+", line)
-            if match:
-                return match.group(1)
-        return ""
+        return self.device_handler.foreground_package(out)
 
     def bring_to_foreground(self, package: str):
         """Resume launcher activity for package (same as launch)."""
@@ -200,28 +212,7 @@ class AdbDevice:
             out = self.shell("dumpsys window", timeout=15)
         except RuntimeError:
             return 0
-        for line in out.splitlines():
-            if "mRotation=" not in line and "mCurrentRotation=" not in line:
-                continue
-            for token in line.replace(",", " ").split():
-                key = None
-                if token.startswith("mRotation="):
-                    key = "mRotation="
-                elif token.startswith("mCurrentRotation="):
-                    key = "mCurrentRotation="
-                if not key:
-                    continue
-                raw = token.split("=", 1)[1].replace("ROTATION_", "")
-                try:
-                    val = int(raw)
-                except ValueError:
-                    continue
-                # Surface.ROTATION_* enum 0..3 or degrees
-                if val in (0, 1, 2, 3):
-                    return val * 90
-                if val in (0, 90, 180, 270):
-                    return val
-        return 0
+        return self.device_handler.screen_rotation(out)
 
     def touch_size(self) -> tuple[int, int]:
         """Effective adb input tap space for current orientation."""

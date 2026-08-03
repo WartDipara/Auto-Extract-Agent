@@ -19,6 +19,17 @@ IM_CHANNEL = os.environ.get("IM_CHANNEL", "feishu").strip().lower() or "feishu"
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
 
+# DingTalk: Client ID = AppKey, Client Secret = AppSecret; robotCode defaults to AppKey.
+DINGTALK_CLIENT_ID = (
+    os.environ.get("DINGTALK_CLIENT_ID", "").strip()
+    or os.environ.get("DINGTALK_APP_KEY", "").strip()
+)
+DINGTALK_CLIENT_SECRET = (
+    os.environ.get("DINGTALK_CLIENT_SECRET", "").strip()
+    or os.environ.get("DINGTALK_APP_SECRET", "").strip()
+)
+DINGTALK_ROBOT_CODE = os.environ.get("DINGTALK_ROBOT_CODE", "").strip()
+
 INBOX_DIR = Path(os.environ.get("INBOX_DIR", str(_AUTO / "inbox")))
 BUF_DONE_DIR = Path(os.environ.get("BUF_DONE_DIR", str(_AUTO / "buf_done")))
 QUEUE_STATUS_FILE = Path(
