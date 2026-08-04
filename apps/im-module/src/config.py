@@ -92,7 +92,7 @@ MSG_CORE_UP_VARIANTS = (
 
 OPS_TEMPLATE = (
     "用法：\n"
-    "【提交任务】直接填入APK的下载链接，可多条\n"
+    "【提交任务】直接填入 APK 下载链接，可多条\n"
     "  @艺术家 https://example.com/a.apk\n"
     "  @艺术家 https://example.com/b.apk\n"
     "  ......\n"
@@ -100,11 +100,21 @@ OPS_TEMPLATE = (
     "【查询】\n"
     "  @艺术家 query progress          查询进行中的任务\n"
     "  @艺术家 query status success    按状态筛选（如 success / failed / timeout）\n"
-    "  @艺术家 query gid t-000       查单个任务\n"
-    "  @艺术家 query export           导出全表 Excel\n"
-    "  @艺术家 query password         查看一下解压密码\n"
+    "  @艺术家 query gid t-0002        查单个任务\n"
+    "  @艺术家 query export            导出全表 Excel\n"
+    "  @艺术家 query password          查看 .bin 解压密码\n"
     "\n"
-    "【帮助】help / ?    【打招呼】你好 / hi"
+    "【帮助】help / ?    【打招呼】你好 / hi\n"
+    "\n"
+    "【你会收到什么】\n"
+    "  成功：群里回传一个 .bin 文件（本质是加密 zip，改后缀）\n"
+    "        里面是提取出的文本 CSV；用 zip 工具 + 密码解压即可\n"
+    "  失败：群里直接发文字说明（状态 + 原因）\n"
+    "\n"
+    "【任务时长预期】 15-50 分钟，最大不超过一小时\n"
+    "【解压密码】\n"
+    "  仅用于打开成功回传的 .bin（当 zip 解压）；\n"
+    "  防止文件在传输时被平台误扫。忘记了就用 query password 查询。"
 )
 
 _MSG_GREET_BODIES = (
