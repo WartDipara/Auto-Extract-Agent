@@ -13,7 +13,7 @@ In group chats you must **@bot** before the body (DingTalk requires an explicit 
 | Intent | What to send | Bot response |
 | ------ | ------------ | ------------ |
 | Enqueue extract | APK URL(s) (see 2) | Write Module A inbox; deliver result when done |
-| Query ledger | `query …` (see 3) | Read-only SQLite → compact **text** (no CSV) |
+| Query ledger | `query …` (see 3) | Text glance, or Excel via `query export` |
 | Help | `help` / `?` / bare `query` | Usage summary |
 | Other | Free text | `unknown command` + usage |
 
@@ -69,9 +69,10 @@ Ledger statuses: section 4. Pipeline runs inside Module A.
 ## 3. Query ledger
 
 Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
-Replies are **plain text only** (chat length capped ~3500 chars). Displayed times use **Asia/Shanghai**.
+Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** when shown).
+Full dump uses **`query export`** (Excel `.xlsx` file).
 
-Columns shown: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`.
+Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`.
 
 ### 3.1 Progress (active queue)
 
@@ -80,19 +81,15 @@ Columns shown: `task_id`, `label`, `status`; failure lists may append a short `e
 ```
 
 - Non-terminal statuses only (`queued` … `extract_done`).
-- Max **30** rows; no error/time noise.
+- Max **30** rows (internal limit); if more: `showing 30/N` + hint `query export`.
 
-### 3.2 All / latest N / status
+### 3.2 By status
 
 ```text
-@bot query all
-@bot query top_n 10
 @bot query status timeout
 ```
 
-- `all` / `status`: max **20** rows (newest first).
-- `top_n`: `N` in **1–30**.
-- Truncation footer points to `query gid` / `query top_n`.
+- Max **20** rows (newest first). Over cap → hint `query export`.
 
 ### 3.3 By id / filename / URL
 
@@ -105,13 +102,34 @@ Columns shown: `task_id`, `label`, `status`; failure lists may append a short `e
 - Match order: `task_id` → `filename` → `url` (exact).
 - Miss: `not found: …`.
 
-### 3.4 Help
+### 3.4 Export full table
+
+```text
+@bot query export
+```
+
+- Excel columns: `task_id,label,status,error,url,filename,updated_at,finished_at` (UTC).
+- Hard cap 50000 rows; truncated exports note `truncated=true`.
+- Feishu sends the file; DingTalk may fall back to a local path hint.
+
+### 3.5 Result password
+
+```text
+@bot query password
+```
+
+- Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (buf_done `.bin` pack password).
+- Reply example: `password is '…' , 将bin文件用zip解压`
+
+### 3.6 Help
 
 ```text
 @bot help
 @bot ?
 @bot query
 ```
+
+Not exposed: `query all` / `query top_n` (removed; limits are internal).
 
 ---
 
@@ -155,8 +173,12 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Item | Note |
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
+| Announce chat | `ANNOUNCE_CHAT_ID` (DingTalk may fall back to `DINGTALK_TEST_CHAT_ID`) |
+| Lifecycle | Online / offline messages to announce chat; core fault/recover is edge-only (no spam) |
+| Core heartbeat | Module A writes `state/heartbeat` every 10s; IM marks stale after `CORE_HEARTBEAT_STALE_SEC` (default 45) |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
+| Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |
 | Runtime | Module A and IM both required; IM alone cannot extract |
 
 

@@ -30,6 +30,7 @@ PROCESSED_DIR = STATE_DIR / "processed"
 SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
+HEARTBEAT_FILE = STATE_DIR / "heartbeat"
 QUEUE_RECENT_DONE_MAX = int(os.environ.get("QUEUE_RECENT_DONE_MAX", "50") or "50")
 TASKS_DB = Path(os.environ.get("TASKS_DB", str(STATE_DIR / "tasks.db")))
 DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "3") or "3")

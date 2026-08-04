@@ -864,7 +864,7 @@ def append_session_to_log(apk_name: str, session_id: str):
 
 
 def cleanup_download_apk(apk_name: str = ""):
-    """Delete downloads/ APK only; task workspace is kept for followup."""
+    """Delete downloads/ APK only; task workspace is kept."""
     name = Path(apk_name).name if apk_name else ""
     if not name:
         return

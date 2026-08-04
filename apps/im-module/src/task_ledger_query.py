@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from openpyxl import Workbook
+
 import config
 from ops_commands import (
     ACTIVE_STATUSES,
@@ -16,11 +18,21 @@ from ops_commands import (
 )
 
 _DISPLAY_COLS = ("task_id", "label", "status", "error", "updated_at")
+_EXPORT_COLS = (
+    "task_id",
+    "label",
+    "status",
+    "error",
+    "url",
+    "filename",
+    "updated_at",
+    "finished_at",
+)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _CHAR_BUDGET = 3500
 _LIST_ROW_CAP = 20
 _PROGRESS_ROW_CAP = 30
-_TOP_N_MAX = 30
+_EXPORT_HARD_CAP = 50000
 _LABEL_MAX = 20
 _LIST_ERROR_MAX = 80
 _GID_ERROR_MAX = 200
@@ -30,7 +42,7 @@ _GID_ERROR_MAX = 200
 class LedgerQueryResult:
     ok: bool
     message: str
-    csv_path: Path | None = None
+    file_path: Path | None = None
     row_count: int = 0
     truncated: bool = False
 
@@ -80,7 +92,10 @@ def _format_progress(rows: list[sqlite3.Row], total: int) -> str:
         lines.append(f"{row['task_id']}  {label}  {row['status']}")
     body = "\n".join(lines)
     if total > len(rows):
-        body += f"\n… showing {len(rows)}/{total}, use query gid <id> or query top_n N"
+        body += (
+            f"\n… showing {len(rows)}/{total}, "
+            "use query gid <id> or query export"
+        )
     return _fit_budget(body)
 
 
@@ -97,7 +112,10 @@ def _format_list(rows: list[sqlite3.Row], *, header: str, total: int) -> str:
         lines.append(line)
     body = "\n".join(lines)
     if total > len(rows):
-        body += f"\n… showing {len(rows)}/{total}, use query gid <id> or query top_n N"
+        body += (
+            f"\n… showing {len(rows)}/{total}, "
+            "use query gid <id> or query export"
+        )
     return _fit_budget(body)
 
 
@@ -119,16 +137,44 @@ def _fit_budget(text: str) -> str:
     return cut + "\n… truncated"
 
 
+def _write_export_xlsx(rows: list[sqlite3.Row]) -> Path:
+    out_dir = Path(config.QUERY_EXPORT_DIR)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now(_SHANGHAI).strftime("%Y%m%d_%H%M%S")
+    path = out_dir / f"tasks_export_{stamp}.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "tasks"
+    ws.append(list(_EXPORT_COLS))
+    for row in rows:
+        ws.append([row[c] if c in row.keys() else "" for c in _EXPORT_COLS])
+    wb.save(path)
+    return path
+
+
 def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
     if cmd.kind == "help":
         return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
+
+    if cmd.kind == "query_password":
+        password = (config.ZIP_PASSWORD or "").strip()
+        if not password:
+            return LedgerQueryResult(
+                ok=False,
+                message="ZIP_PASSWORD missing in apps/auto-extract/.env",
+            )
+        return LedgerQueryResult(
+            ok=True,
+            message=f"password is '{password}' , 将bin文件用zip解压",
+        )
 
     try:
         conn = _connect()
     except FileNotFoundError as exc:
         return LedgerQueryResult(ok=False, message=str(exc))
 
-    cols = ", ".join(_DISPLAY_COLS)
+    display_cols = ", ".join(_DISPLAY_COLS)
+    export_cols = ", ".join(_EXPORT_COLS)
     try:
         if cmd.kind == "query_progress":
             placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
@@ -139,44 +185,18 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
             ).fetchone()[0]
             rows = list(
                 conn.execute(
-                    f"SELECT {cols} FROM tasks WHERE status IN ({placeholders}) "
+                    f"SELECT {display_cols} FROM tasks "
+                    f"WHERE status IN ({placeholders}) "
                     "ORDER BY updated_at DESC LIMIT ?",
                     (*statuses, _PROGRESS_ROW_CAP),
                 ).fetchall()
             )
-            msg = _format_progress(rows, int(total))
             return LedgerQueryResult(
                 ok=True,
-                message=msg,
+                message=_format_progress(rows, int(total)),
                 row_count=len(rows),
                 truncated=int(total) > len(rows),
             )
-
-        if cmd.kind == "query_top_n":
-            try:
-                n = int((cmd.arg or "").strip())
-            except ValueError:
-                return LedgerQueryResult(
-                    ok=False,
-                    message=f"top_n requires an integer.\n{config.OPS_TEMPLATE}",
-                )
-            if n < 1 or n > _TOP_N_MAX:
-                return LedgerQueryResult(
-                    ok=False,
-                    message=f"top_n must be 1–{_TOP_N_MAX}.\n{config.OPS_TEMPLATE}",
-                )
-            rows = list(
-                conn.execute(
-                    f"SELECT {cols} FROM tasks ORDER BY updated_at DESC LIMIT ?",
-                    (n,),
-                ).fetchall()
-            )
-            msg = _format_list(
-                rows,
-                header=f"top_n={n}  {len(rows)} shown",
-                total=len(rows),
-            )
-            return LedgerQueryResult(ok=True, message=msg, row_count=len(rows))
 
         if cmd.kind == "query_status":
             status = (cmd.arg or "").strip()
@@ -184,26 +204,28 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                 allowed = ", ".join(sorted(LEDGER_STATUSES))
                 return LedgerQueryResult(
                     ok=False,
-                    message=f"invalid status. allowed: {allowed}\n{config.OPS_TEMPLATE}",
+                    message=(
+                        f"invalid status. allowed: {allowed}\n"
+                        f"{config.OPS_TEMPLATE}"
+                    ),
                 )
             total = conn.execute(
                 "SELECT COUNT(*) FROM tasks WHERE status=?", (status,)
             ).fetchone()[0]
             rows = list(
                 conn.execute(
-                    f"SELECT {cols} FROM tasks WHERE status=? "
+                    f"SELECT {display_cols} FROM tasks WHERE status=? "
                     "ORDER BY updated_at DESC LIMIT ?",
                     (status, _LIST_ROW_CAP),
                 ).fetchall()
             )
-            msg = _format_list(
-                rows,
-                header=f"status={status}  {len(rows)} shown",
-                total=int(total),
-            )
             return LedgerQueryResult(
                 ok=True,
-                message=msg,
+                message=_format_list(
+                    rows,
+                    header=f"status={status}  {len(rows)} shown",
+                    total=int(total),
+                ),
                 row_count=len(rows),
                 truncated=int(total) > len(rows),
             )
@@ -217,7 +239,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                 )
             rows = list(
                 conn.execute(
-                    f"SELECT {cols} FROM tasks "
+                    f"SELECT {display_cols} FROM tasks "
                     "WHERE task_id=? OR filename=? OR url=? "
                     "ORDER BY updated_at DESC LIMIT 5",
                     (gid, gid, gid),
@@ -231,24 +253,27 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                 ok=True, message=_format_gid(rows), row_count=len(rows)
             )
 
-        if cmd.kind == "query_all":
-            total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        if cmd.kind == "query_export":
             rows = list(
                 conn.execute(
-                    f"SELECT {cols} FROM tasks ORDER BY updated_at DESC LIMIT ?",
-                    (_LIST_ROW_CAP,),
+                    f"SELECT {export_cols} FROM tasks "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (_EXPORT_HARD_CAP + 1,),
                 ).fetchall()
             )
-            msg = _format_list(
-                rows,
-                header=f"all  {len(rows)} shown",
-                total=int(total),
-            )
+            truncated = len(rows) > _EXPORT_HARD_CAP
+            if truncated:
+                rows = rows[:_EXPORT_HARD_CAP]
+            path = _write_export_xlsx(rows)
+            msg = f"export {len(rows)} rows xlsx (UTC timestamps)"
+            if truncated:
+                msg += f" truncated=true cap={_EXPORT_HARD_CAP}"
             return LedgerQueryResult(
                 ok=True,
                 message=msg,
+                file_path=path,
                 row_count=len(rows),
-                truncated=int(total) > len(rows),
+                truncated=truncated,
             )
 
         return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)

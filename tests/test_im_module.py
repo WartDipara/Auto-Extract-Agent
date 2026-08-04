@@ -296,3 +296,57 @@ def test_queue_manager_snapshot(tmp_path, monkeypatch):
     assert snap["active"] == []
     assert snap["recent_done"][0]["status"] == "success"
     assert snap["recent_done"][0]["buf_done_zip"].endswith("stem_label.bin")
+
+
+def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+
+    class _FakeChannel:
+        def __init__(self):
+            self.texts: list[tuple[str, str]] = []
+
+        def start(self, on_message):
+            pass
+
+        def reply_text(self, chat_id, text):
+            self.texts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    hb = tmp_path / "heartbeat"
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "group:cid-test")
+    monkeypatch.setattr(config, "CORE_HEARTBEAT_PATH", hb)
+    monkeypatch.setattr(config, "CORE_HEARTBEAT_STALE_SEC", 45.0)
+
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+
+    # No heartbeat → one fault
+    c._check_core_health()
+    assert ch.texts == [("group:cid-test", config.MSG_CORE_DOWN)]
+    c._check_core_health()
+    assert ch.texts == [("group:cid-test", config.MSG_CORE_DOWN)]
+
+    # Fresh heartbeat → one recover
+    hb.write_text("ok\n", encoding="utf-8")
+    c._check_core_health()
+    assert ch.texts[-1] == ("group:cid-test", config.MSG_CORE_UP)
+    c._check_core_health()
+    assert len([t for t in ch.texts if t[1] == config.MSG_CORE_UP]) == 1
+
+    # Empty announce chat → skip without crash
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    ch.texts.clear()
+    c._core_fault_announced = False
+    hb.unlink()
+    c._check_core_health()
+    assert ch.texts == []

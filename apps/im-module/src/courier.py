@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import atexit
 import logging
+import signal
 import sqlite3
 import threading
 import time
@@ -36,13 +38,56 @@ class Courier:
         self._jobs: dict[str, PendingJob] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._offline_announced = False
+        self._core_fault_announced = False
+        self._hooks_registered = False
 
     def start(self) -> None:
+        self._register_lifecycle_hooks()
         threading.Thread(target=self._poll_loop, name="im-poll", daemon=True).start()
+        self._announce(config.MSG_BOT_ONLINE)
         self._channel.start(self.on_message)
 
     def stop(self) -> None:
+        self._announce_offline_once()
         self._stop.set()
+
+    def _register_lifecycle_hooks(self) -> None:
+        if self._hooks_registered:
+            return
+        self._hooks_registered = True
+
+        def _on_exit() -> None:
+            self._announce_offline_once()
+
+        atexit.register(_on_exit)
+
+        def _on_signal(signum, _frame) -> None:
+            _log.info("signal %s received, shutting down", signum)
+            self.stop()
+            raise SystemExit(0)
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _on_signal)
+            except (ValueError, OSError):
+                pass
+
+    def _announce(self, text: str) -> None:
+        chat_id = (config.ANNOUNCE_CHAT_ID or "").strip()
+        if not chat_id:
+            _log.warning("ANNOUNCE_CHAT_ID empty; skip announce: %s", text)
+            return
+        try:
+            self._channel.reply_text(chat_id, text)
+        except Exception:
+            _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
+
+    def _announce_offline_once(self) -> None:
+        if self._offline_announced:
+            return
+        self._offline_announced = True
+        self._announce(config.MSG_BOT_OFFLINE)
 
     def on_message(self, chat_id: str, text: str) -> None:
         cmd = parse_ops_command(text)
@@ -58,6 +103,17 @@ class Courier:
     def _handle_ops(self, chat_id: str, cmd) -> None:
         result = run_ledger_query(cmd)
         self._channel.reply_text(chat_id, result.message)
+        if not result.ok or result.file_path is None:
+            return
+        try:
+            self._channel.send_file(chat_id, result.file_path)
+        except NotImplementedError:
+            self._channel.reply_text(
+                chat_id,
+                f"channel cannot send files; saved: {result.file_path}",
+            )
+        except Exception as exc:
+            self._channel.reply_text(chat_id, f"send file failed: {exc}")
 
     def _enqueue_urls(
         self, chat_id: str, urls: list[str], *, ack: bool = True
@@ -85,9 +141,26 @@ class Courier:
         while not self._stop.is_set():
             try:
                 self._tick()
+                self._check_core_health()
             except Exception:
                 _log.exception("poll tick failed")
             self._stop.wait(config.POLL_SEC)
+
+    def _core_is_healthy(self) -> bool:
+        path = Path(config.CORE_HEARTBEAT_PATH)
+        if not path.is_file():
+            return False
+        age = time.time() - path.stat().st_mtime
+        return age <= float(config.CORE_HEARTBEAT_STALE_SEC)
+
+    def _check_core_health(self) -> None:
+        healthy = self._core_is_healthy()
+        if not healthy and not self._core_fault_announced:
+            self._announce(config.MSG_CORE_DOWN)
+            self._core_fault_announced = True
+        elif healthy and self._core_fault_announced:
+            self._announce(config.MSG_CORE_UP)
+            self._core_fault_announced = False
 
     def _tick(self) -> None:
         with self._lock:

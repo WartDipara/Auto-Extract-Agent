@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from pathlib import Path
 
 import config
@@ -28,7 +29,6 @@ from prep.debuggable_apk import package_name_from_apk
 from resource_pools import AdbPool, OpenCodePool
 from shared.archive_contract import (
     clean_result_csv,
-    mark_module_a_done,
     reset_task_workspace,
     task_layout,
     utc_now,
@@ -41,6 +41,22 @@ _started = False
 _start_lock = threading.Lock()
 _adb_pool: AdbPool | None = None
 _opencode_pool: OpenCodePool | None = None
+_HEARTBEAT_SEC = 10.0
+
+
+def _write_heartbeat() -> None:
+    path = config.HEARTBEAT_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(utc_now() + "\n", encoding="utf-8")
+
+
+def _heartbeat_loop() -> None:
+    while True:
+        try:
+            _write_heartbeat()
+        except Exception:
+            _log.exception("heartbeat write failed")
+        time.sleep(_HEARTBEAT_SEC)
 
 
 def _pools() -> tuple[AdbPool, OpenCodePool]:
@@ -316,8 +332,6 @@ def _archive_loop() -> None:
                 if error_info is not None:
                     meta["error_info"] = error_info.to_dict()
                 write_meta(task_root, meta)
-                if status == "success":
-                    mark_module_a_done(task_root)
         except Exception as exc:
             emit(
                 normalize(exc),
@@ -390,6 +404,10 @@ def start_pipeline() -> None:
             ).start()
         threading.Thread(
             target=_archive_loop, name="archive-0", daemon=True
+        ).start()
+        _write_heartbeat()
+        threading.Thread(
+            target=_heartbeat_loop, name="heartbeat", daemon=True
         ).start()
         recover_and_enqueue()
         _started = True

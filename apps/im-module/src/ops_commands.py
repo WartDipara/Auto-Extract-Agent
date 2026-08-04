@@ -60,12 +60,12 @@ def parse_ops_command(text: str) -> OpsCommand | None:
     parts = rest.split(None, 1)
     mode = parts[0].lower()
     tail = parts[1].strip() if len(parts) > 1 else ""
-    if mode == "all":
-        return OpsCommand(kind="query_all")
     if mode == "progress":
         return OpsCommand(kind="query_progress")
-    if mode == "top_n":
-        return OpsCommand(kind="query_top_n", arg=tail)
+    if mode == "export":
+        return OpsCommand(kind="query_export")
+    if mode == "password":
+        return OpsCommand(kind="query_password")
     if mode == "gid":
         return OpsCommand(kind="query_gid", arg=tail)
     if mode == "status":

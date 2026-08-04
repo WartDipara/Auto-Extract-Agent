@@ -15,12 +15,20 @@ _HERE = Path(__file__).resolve().parent
 _REPO = _HERE.parent
 _APP = _REPO / "apps" / "auto-extract"
 _SRC = _APP / "src"
-for p in (_APP, _SRC, _REPO):
-    if str(p) not in sys.path:
-        sys.path.insert(0, str(p))
+
+
+def _ensure_auto_extract_imports() -> None:
+    for p in (str(_APP), str(_SRC), str(_REPO)):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    cfg = sys.modules.get("config")
+    if cfg is not None and not hasattr(cfg, "WORKSPACE_ROOT"):
+        del sys.modules["config"]
 
 
 def test_opencode_prompt_and_cmd():
+    _ensure_auto_extract_imports()
     import config
     import extract_bridge as eb
     import prompts as prompt_store
@@ -161,6 +169,7 @@ def test_opencode_prompt_and_cmd():
 
 
 def test_csv_quality():
+    _ensure_auto_extract_imports()
     import config
     from csv_quality import (
         check_csv_quality,
@@ -241,48 +250,24 @@ def test_csv_quality():
 
 
 def test_workspace_markers():
+    _ensure_auto_extract_imports()
     import config
     from shared.archive_contract import (
-        FollowupLockedError,
-        acquire_followup_lock,
-        has_module_a_done,
-        mark_module_a_done,
-        release_followup_lock,
+        has_stop,
+        mark_stop,
         reset_task_workspace,
         rmtree_force,
     )
 
     key = "_smoke_markers"
     root = reset_task_workspace(config.WORKSPACE_ROOT, key)
-    assert not has_module_a_done(root)
-    try:
-        acquire_followup_lock(root)
-        assert False, "expected RuntimeError without a_done"
-    except RuntimeError:
-        pass
-    mark_module_a_done(root)
-    assert has_module_a_done(root)
-    acquire_followup_lock(root)
-    try:
-        reset_task_workspace(config.WORKSPACE_ROOT, key)
-        assert False, "expected FollowupLockedError"
-    except FollowupLockedError:
-        pass
-    release_followup_lock(root)
-
-    from shared.archive_contract import has_stop, mark_stop
-
+    assert not has_stop(root)
     mark_stop(root)
     assert has_stop(root)
-    try:
-        acquire_followup_lock(root)
-        assert False, "expected RuntimeError when stopped"
-    except RuntimeError:
-        pass
 
     root2 = reset_task_workspace(config.WORKSPACE_ROOT, key)
     assert root2 == root
-    assert not has_module_a_done(root2)
+    assert not has_stop(root2)
     rmtree_force(root2)
     print("WORKSPACE_MARKERS_OK", flush=True)
 
