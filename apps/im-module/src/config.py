@@ -60,8 +60,8 @@ CORE_HEARTBEAT_STALE_SEC = float(
     os.environ.get("CORE_HEARTBEAT_STALE_SEC", "45") or "45"
 )
 
-MSG_BOT_ONLINE = "Lion已就位，可以开始工作了"
-MSG_BOT_OFFLINE = "Lion目前有事，先走开了"
+MSG_BOT_ONLINE = "Lino已就位，可以开始工作了"
+MSG_BOT_OFFLINE = "Lino目前有事，先走开了"
 MSG_CORE_DOWN = "出故障了，等我去修修再来！"
 MSG_CORE_UP = "搞定了，又可以正常运作力"
 
