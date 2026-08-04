@@ -1,5 +1,3 @@
-"""IM module entry: channel-routed courier → Module A inbox / buf_done."""
-
 from __future__ import annotations
 
 import logging
@@ -23,8 +21,7 @@ def main() -> None:
     config.INBOX_DIR.mkdir(parents=True, exist_ok=True)
     print(f"im-module channel={config.IM_CHANNEL}", flush=True)
     print(f"im-module inbox={config.INBOX_DIR}", flush=True)
-    print(f"im-module queue_status={config.QUEUE_STATUS_FILE}", flush=True)
-    print(f"im-module buf_done={config.BUF_DONE_DIR}", flush=True)
+    print(f"im-module tasks_db={config.TASKS_DB}", flush=True)
     Courier(create_channel(config.IM_CHANNEL)).start()
 
 

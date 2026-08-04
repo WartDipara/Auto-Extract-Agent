@@ -1,5 +1,3 @@
-"""Extract and validate inbox JSON from chat text."""
-
 from __future__ import annotations
 
 import json

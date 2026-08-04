@@ -1,5 +1,3 @@
-"""Route IM_CHANNEL env value to a Channel implementation (open for new adapters)."""
-
 from __future__ import annotations
 
 import os

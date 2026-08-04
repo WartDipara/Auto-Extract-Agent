@@ -1,5 +1,3 @@
-"""Device preprocessing: debuggable resign / install / OCR gate / hotfix pull."""
-
 from __future__ import annotations
 
 import logging
@@ -44,26 +42,19 @@ class PrepResult:
     screen_reached: str = ""
 
 
-def run_device_prep(
-    *,
-    task_root: Path,
-    url: str | None = None,
-    apk_path: Path | None = None,
-    serial: str | None = None,
-    skip_ocr_gate: bool = False,
-) -> PrepResult:
-    """Prep into an existing task_root (decoded/hotfix/outputs already created)."""
-    if not url and not apk_path:
-        raise TaskError(code="PREP_ARGS", message="url or apk_path required")
+@dataclass
+class PatchResult:
+    package_name: str
+    apk_stem: str
+    original_apk: Path
+    signed_apk: Path
+    decoded_dir: Path
+    task_root: Path
 
+
+def run_patch_stage(*, task_root: Path, apk_path: Path) -> PatchResult:
     layout = task_layout(task_root)
     clear_signed_apks(task_root)
-
-    if apk_path is None:
-        apk_path = download(url)
-    else:
-        stage(f"using local apk {Path(apk_path).name}")
-
     apk_path = Path(apk_path)
     if not apk_path.is_file():
         raise TaskError(
@@ -71,11 +62,8 @@ def run_device_prep(
             message=f"apk not found: {apk_path}",
             details={"apk_path": str(apk_path)},
         )
-
     stem = apk_path.stem
     stage(f"apk ready {apk_path.name}")
-
-    stage("reading package name...")
     package_name = package_name_from_apk(apk_path)
     if not package_name:
         raise TaskError(
@@ -84,55 +72,45 @@ def run_device_prep(
             details={"apk": apk_path.name},
         )
     stage(f"package {package_name}")
-
     stage("extracting apk zip -> decoded/ ...")
     decoded = extract_apk_zip(apk_path, layout["decoded"])
     stage("decoded extract finished")
-
-    stage("checking adb device...")
-    adb = AdbDevice(serial=serial or config.ADB_SERIAL or None)
-    online = adb.list_online_devices()
-    if not online or (adb.serial and adb.serial not in online):
-        detail = (
-            f"ADB_SERIAL={adb.serial} not online; online={online}"
-            if adb.serial
-            else f"online={online}"
-        )
-        stage(f"no adb device ({detail}); skip debuggable/install/hotfix")
-        layout["hotfix"].mkdir(parents=True, exist_ok=True)
-        return PrepResult(
-            package_name=package_name,
-            apk_stem=stem,
-            original_apk=apk_path,
-            signed_apk=apk_path,
-            decoded_dir=decoded,
-            hotfix_dir=layout["hotfix"],
-            hotfix_has_files=False,
-            pull_source="none",
-            task_root=Path(task_root),
-            screen_reached="no_device",
-        )
-
-    serial_used = adb.require_one_device()
-    stage(f"adb device ready {serial_used}")
-
-    stage(f"checking if installed {package_name}")
-    if adb.ensure_uninstalled(package_name):
-        stage(f"uninstalled existing {package_name}")
-    else:
-        stage("not installed on device")
-
     signed = Path(task_root) / f"{stem}_signed.apk"
     stage("patching debuggable + signing...")
     make_debuggable_signed_apk(apk_path, signed)
     stage(f"signed apk ready {signed.name}")
+    layout["hotfix"].mkdir(parents=True, exist_ok=True)
+    return PatchResult(
+        package_name=package_name,
+        apk_stem=stem,
+        original_apk=apk_path,
+        signed_apk=signed,
+        decoded_dir=decoded,
+        task_root=Path(task_root),
+    )
 
-    stage(f"ensuring clean install {package_name}")
-    adb.ensure_uninstalled(package_name)
-    stage(f"installing {signed.name}")
+
+def run_device_stage(
+    *,
+    task_root: Path,
+    apk_path: Path,
+    signed_apk: Path,
+    package_name: str,
+    serial: str,
+    skip_ocr_gate: bool = False,
+) -> PrepResult:
+    layout = task_layout(task_root)
+    apk_path = Path(apk_path)
+    signed_apk = Path(signed_apk)
+    stem = apk_path.stem
+    adb = AdbDevice(serial=serial)
+    stage(f"adb device ready {serial}")
+    if adb.ensure_uninstalled(package_name):
+        stage(f"uninstalled existing {package_name}")
+    stage(f"installing {signed_apk.name}")
     try:
         dispatch_device(adb).install_apk(
-            adb, signed, package_name=package_name
+            adb, signed_apk, package_name=package_name
         )
     except TaskError:
         raise
@@ -148,14 +126,9 @@ def run_device_prep(
             cause=exc,
         ) from exc
     stage("install finished")
-
     stage("starting game...")
     adb.launch_package(package_name)
-    stage("game started")
-
     gate_timeout = float(config.PREP_GATE_TIMEOUT_SEC)
-    stage(f"entry gate timeout {int(gate_timeout)}s (AI done / crash / safety)")
-
     screen_reached = "skipped"
     pull_source = "none"
     if not skip_ocr_gate:
@@ -173,29 +146,71 @@ def run_device_prep(
         except TimeoutError:
             screen_reached = "timeout"
             stage("ocr gate safety timeout; still attempting hotfix pull")
-
     stage("pulling hotfix...")
     pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
     stage(f"hotfix pull finished source={pull_source}")
-
-    stage("stopping game...")
     adb.force_stop(package_name)
-    stage("game stopped")
-    stage(f"uninstalling game {package_name}")
     adb.ensure_uninstalled(package_name)
-    stage("game uninstalled")
-
     has_files = hotfix_has_content(layout["hotfix"])
-    stage(f"prep done hotfix_files={'yes' if has_files else 'no'}")
+    stage(f"device stage done hotfix_files={'yes' if has_files else 'no'}")
     return PrepResult(
         package_name=package_name,
         apk_stem=stem,
         original_apk=apk_path,
-        signed_apk=signed,
-        decoded_dir=decoded,
+        signed_apk=signed_apk,
+        decoded_dir=layout["decoded"],
         hotfix_dir=layout["hotfix"],
         hotfix_has_files=has_files,
         pull_source=pull_source,
         task_root=Path(task_root),
         screen_reached=screen_reached,
+    )
+
+
+def run_device_prep(
+    *,
+    task_root: Path,
+    url: str | None = None,
+    apk_path: Path | None = None,
+    serial: str | None = None,
+    skip_ocr_gate: bool = False,
+) -> PrepResult:
+    if not url and not apk_path:
+        raise TaskError(code="PREP_ARGS", message="url or apk_path required")
+    if apk_path is None:
+        apk_path = download(url)
+    else:
+        stage(f"using local apk {Path(apk_path).name}")
+    patch = run_patch_stage(task_root=task_root, apk_path=Path(apk_path))
+    adb = AdbDevice(serial=serial or config.ADB_SERIAL or None)
+    online = adb.list_online_devices()
+    if not online or (adb.serial and adb.serial not in online):
+        detail = (
+            f"ADB_SERIAL={adb.serial} not online; online={online}"
+            if adb.serial
+            else f"online={online}"
+        )
+        stage(f"no adb device ({detail}); skip install/hotfix")
+        layout = task_layout(task_root)
+        layout["hotfix"].mkdir(parents=True, exist_ok=True)
+        return PrepResult(
+            package_name=patch.package_name,
+            apk_stem=patch.apk_stem,
+            original_apk=patch.original_apk,
+            signed_apk=patch.signed_apk,
+            decoded_dir=patch.decoded_dir,
+            hotfix_dir=layout["hotfix"],
+            hotfix_has_files=False,
+            pull_source="none",
+            task_root=Path(task_root),
+            screen_reached="no_device",
+        )
+    serial_used = adb.require_one_device()
+    return run_device_stage(
+        task_root=task_root,
+        apk_path=patch.original_apk,
+        signed_apk=patch.signed_apk,
+        package_name=patch.package_name,
+        serial=serial_used,
+        skip_ocr_gate=skip_ocr_gate,
     )

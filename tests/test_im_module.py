@@ -49,31 +49,6 @@ def test_write_inbox_json(tmp_path):
     assert data["get-texts"]["urls"] == ["https://x.apk"]
 
 
-def test_find_by_source():
-    from queue_reader import find_by_source, list_by_source
-
-    status = {
-        "active": [{"source_file": "im_1.json", "status": "preparing"}],
-        "recent_done": [{"source_file": "im_2.json", "status": "success"}],
-    }
-    a, d = find_by_source(status, "im_1.json")
-    assert a["status"] == "preparing" and d is None
-    a, d = find_by_source(status, "im_2.json")
-    assert a is None and d["status"] == "success"
-
-    multi = {
-        "active": [
-            {"source_file": "im_x.json", "task_id": "t-2", "status": "preparing"},
-        ],
-        "recent_done": [
-            {"source_file": "im_x.json", "task_id": "t-1", "status": "success"},
-        ],
-    }
-    actives, dones = list_by_source(multi, "im_x.json")
-    assert [r["task_id"] for r in actives] == ["t-2"]
-    assert [r["task_id"] for r in dones] == ["t-1"]
-
-
 def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     """One inbox with N urls must reply as each task finishes, not only the last."""
     for p in (str(_IM_SRC),):
@@ -82,11 +57,12 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
         sys.path.insert(0, p)
     cfg = sys.modules.get("config")
     if cfg is not None and "im-module" not in (cfg.__file__ or ""):
-        for name in ("config", "courier", "queue_reader"):
+        for name in ("config", "courier", "ops_commands", "task_ledger_query"):
             sys.modules.pop(name, None)
 
     import config
     import courier as courier_mod
+    import sqlite3
 
     class _FakeChannel:
         def __init__(self):
@@ -106,9 +82,31 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     buf.mkdir()
     (buf / "a.bin").write_bytes(b"a")
     (buf / "b.bin").write_bytes(b"b")
-    status_path = tmp_path / "queue_status.json"
-    monkeypatch.setattr(config, "QUEUE_STATUS_FILE", status_path)
+    db = tmp_path / "tasks.db"
+    monkeypatch.setattr(config, "TASKS_DB", db)
     monkeypatch.setattr(config, "ZIP_WAIT_SEC", 600)
+
+    def _seed(rows: list[tuple]):
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tasks (
+                task_id TEXT PRIMARY KEY,
+                url TEXT, label TEXT, filename TEXT, status TEXT, error TEXT,
+                result_csv TEXT, session_id TEXT, buf_done_zip TEXT, source_file TEXT,
+                adb_serial TEXT, created_at TEXT, updated_at TEXT, finished_at TEXT,
+                im_delivered_at TEXT
+            )
+            """
+        )
+        conn.execute("DELETE FROM tasks")
+        for row in rows:
+            conn.execute(
+                "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                row,
+            )
+        conn.commit()
+        conn.close()
 
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
@@ -120,30 +118,26 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     )
     c._jobs[job.request_id] = job
 
-    # First task done while second still active → should deliver immediately.
-    status_path.write_text(
-        json.dumps(
-            {
-                "active": [
-                    {
-                        "task_id": "t-2",
-                        "source_file": "im_1000_1.json",
-                        "status": "preparing",
-                        "label": "game2",
-                    }
-                ],
-                "recent_done": [
-                    {
-                        "task_id": "t-1",
-                        "source_file": "im_1000_1.json",
-                        "status": "success",
-                        "label": "game1",
-                        "buf_done_zip": str(buf / "a.bin"),
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _seed(
+        [
+            (
+                "t-1",
+                "https://x/a.apk",
+                "game1",
+                "a.apk",
+                "success",
+                "",
+                "",
+                "",
+                str(buf / "a.bin"),
+                "im_1000_1.json",
+                "",
+                "t0",
+                "t1",
+                "t1",
+                "",
+            )
+        ]
     )
     c._tick()
     assert job.delivered_ids == {"t-1"}
@@ -151,37 +145,49 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     assert ch.files == ["a.bin"]
     assert any("a.bin" in t for t in ch.texts)
 
-    # Second finishes → deliver second; job complete.
-    status_path.write_text(
-        json.dumps(
-            {
-                "active": [],
-                "recent_done": [
-                    {
-                        "task_id": "t-2",
-                        "source_file": "im_1000_1.json",
-                        "status": "success",
-                        "label": "game2",
-                        "buf_done_zip": str(buf / "b.bin"),
-                    },
-                    {
-                        "task_id": "t-1",
-                        "source_file": "im_1000_1.json",
-                        "status": "success",
-                        "label": "game1",
-                        "buf_done_zip": str(buf / "a.bin"),
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
+    _seed(
+        [
+            (
+                "t-1",
+                "https://x/a.apk",
+                "game1",
+                "a.apk",
+                "success",
+                "",
+                "",
+                "",
+                str(buf / "a.bin"),
+                "im_1000_1.json",
+                "",
+                "t0",
+                "t1",
+                "t1",
+                "delivered",
+            ),
+            (
+                "t-2",
+                "https://x/b.apk",
+                "game2",
+                "b.apk",
+                "success",
+                "",
+                "",
+                "",
+                str(buf / "b.bin"),
+                "im_1000_1.json",
+                "",
+                "t0",
+                "t2",
+                "t2",
+                "",
+            ),
+        ]
     )
     c._tick()
     assert job.delivered_ids == {"t-1", "t-2"}
     assert job.finished
     assert ch.files == ["a.bin", "b.bin"]
 
-    # Idempotent: no duplicate send.
     c._tick()
     assert ch.files == ["a.bin", "b.bin"]
 
@@ -228,16 +234,19 @@ def test_queue_manager_snapshot(tmp_path, monkeypatch):
         sys.path.insert(0, p)
     cfg = sys.modules.get("config")
     if cfg is not None and "auto-extract" not in (cfg.__file__ or ""):
-        for name in ("config", "queue_manager"):
+        for name in ("config", "queue_manager", "task_store", "pipeline_queues"):
             sys.modules.pop(name, None)
 
     import config
     import queue_manager as qm
+    import task_store
 
     monkeypatch.setattr(config, "STATE_DIR", tmp_path)
     monkeypatch.setattr(config, "QUEUE_STATUS_FILE", tmp_path / "queue_status.json")
     monkeypatch.setattr(config, "BUF_DONE_DIR", tmp_path / "buf_done")
+    monkeypatch.setattr(config, "TASKS_DB", tmp_path / "tasks.db")
     monkeypatch.setattr(config, "QUEUE_RECENT_DONE_MAX", 10)
+    task_store._conn = None
     qm.load()
     created = qm.enqueue_urls(["https://g.apk"], "im_demo.json")
     assert qm.get_task(created[0].task_id) is not None
@@ -249,7 +258,10 @@ def test_queue_manager_snapshot(tmp_path, monkeypatch):
         status="success",
         result_csv=str(tmp_path / "result" / "stem_label.csv"),
     )
-    assert qm.get_task(created[0].task_id) is None
+    # Terminal leaves memory active list, but remains readable from DB.
+    assert created[0].task_id not in {t.task_id for t in qm.list_tasks()}
+    done = qm.get_task(created[0].task_id)
+    assert done is not None and done.status == "success"
     snap = json.loads(config.QUEUE_STATUS_FILE.read_text(encoding="utf-8"))
     assert snap["active"] == []
     assert snap["recent_done"][0]["status"] == "success"

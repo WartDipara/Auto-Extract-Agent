@@ -1,15 +1,3 @@
-"""DingTalk Stream channel (receive) + OpenAPI send.
-
-Official pieces used:
-- Stream SDK topic `/v1.0/im/bot/messages/get` (ChatbotMessage)
-- Incoming fields: conversationType 1=OTO / 2=group, conversationId, text.content,
-  isInAtList, senderStaffId, msgtype
-- Async send (courier delayed reply): groupMessages/send or oToMessages/batchSend
-  with msgKey=sampleText, msgParam={"content": "..."}
-
-sessionWebhook replies expire quickly and are NOT used for courier delivery.
-"""
-
 from __future__ import annotations
 
 import logging

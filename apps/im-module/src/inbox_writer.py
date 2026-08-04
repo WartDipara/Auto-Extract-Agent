@@ -1,5 +1,3 @@
-"""Atomic write of task JSON into Module A inbox."""
-
 from __future__ import annotations
 
 import json

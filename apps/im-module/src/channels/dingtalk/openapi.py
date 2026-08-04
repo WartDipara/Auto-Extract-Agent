@@ -1,11 +1,3 @@
-"""DingTalk OpenAPI helpers (accessToken + robot send).
-
-Docs:
-- accessToken: POST /v1.0/oauth2/accessToken
-- group send: POST /v1.0/robot/groupMessages/send (msgKey/msgParam)
-- oto send: POST /v1.0/robot/oToMessages/batchSend
-"""
-
 from __future__ import annotations
 
 import json

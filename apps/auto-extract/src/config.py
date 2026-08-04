@@ -31,6 +31,16 @@ SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
 QUEUE_RECENT_DONE_MAX = int(os.environ.get("QUEUE_RECENT_DONE_MAX", "50") or "50")
+TASKS_DB = Path(os.environ.get("TASKS_DB", str(STATE_DIR / "tasks.db")))
+DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "3") or "3")
+PATCH_WORKERS = int(os.environ.get("PATCH_WORKERS", "2") or "2")
+OPENCODE_SLOTS = int(os.environ.get("OPENCODE_SLOTS", "1") or "1")
+DEVICE_WAIT_TIMEOUT_SEC = float(
+    os.environ.get("DEVICE_WAIT_TIMEOUT_SEC", "3600") or "3600"
+)
+OPENCODE_WAIT_TIMEOUT_SEC = float(
+    os.environ.get("OPENCODE_WAIT_TIMEOUT_SEC", "7200") or "7200"
+)
 # Required for buf_done encrypted pack; no hardcoded default.
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 

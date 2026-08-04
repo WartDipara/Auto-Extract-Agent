@@ -1,12 +1,3 @@
-"""Map DingTalk conversation fields to courier session keys.
-
-Courier stores an opaque chat_id and later calls reply_text(chat_id).
-DingTalk group vs 1:1 use different OpenAPIs, so encode type into the key:
-
-- group:{openConversationId}  conversationType == "2"
-- oto:{staffId}               conversationType == "1"
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

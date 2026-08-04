@@ -1,8 +1,7 @@
-"""Channel-agnostic courier: inbox submit, queue watch, buf_done delivery."""
-
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, field
@@ -11,9 +10,9 @@ from pathlib import Path
 import config
 from channels.base import Channel
 from inbox_writer import new_request_id, write_inbox_json
+from ops_commands import parse_ops_command
 from parser import parse_task_message
-from queue_reader import list_by_source, read_queue_status
-from sheet_sync import commit_sync, is_sync_command, sync_from_bitable
+from task_ledger_query import run_ledger_query
 
 _log = logging.getLogger(__name__)
 
@@ -46,45 +45,31 @@ class Courier:
         self._stop.set()
 
     def on_message(self, chat_id: str, text: str) -> None:
-        if is_sync_command(text):
-            self._handle_sheet_sync(chat_id)
+        cmd = parse_ops_command(text)
+        if cmd is not None:
+            self._handle_ops(chat_id, cmd)
             return
-
         payload = parse_task_message(text)
         if payload is None:
-            self._channel.reply_text(chat_id, f"无法识别指令。\n{config.OPS_TEMPLATE}")
+            self._channel.reply_text(chat_id, f"unknown command.\n{config.OPS_TEMPLATE}")
             return
         self._enqueue_urls(chat_id, payload["get-texts"]["urls"])
 
-    def _handle_sheet_sync(self, chat_id: str) -> None:
-        result = sync_from_bitable()
-        if result.error:
-            self._channel.reply_text(chat_id, result.summary_text())
+    def _handle_ops(self, chat_id: str, cmd) -> None:
+        result = run_ledger_query(cmd)
+        if not result.ok or result.csv_path is None:
+            self._channel.reply_text(chat_id, result.message)
             return
-        if not result.queued_urls:
-            commit_sync(result)
-            self._channel.reply_text(chat_id, result.summary_text())
-            return
-
-        batch = max(1, int(config.SHEET_SYNC_BATCH_SIZE))
-        chunks = [
-            result.queued_urls[i : i + batch]
-            for i in range(0, len(result.queued_urls), batch)
-        ]
-        names: list[str] = []
-        for urls in chunks:
-            path = self._enqueue_urls(chat_id, urls, ack=False)
-            names.append(path.name)
-        commit_sync(result)
-        summary = result.summary_text()
-        summary += f"\n已写入 inbox：{', '.join(names)}"
-        self._channel.reply_text(chat_id, summary)
-        _log.info(
-            "sheet sync chat=%s queued=%s files=%s",
-            chat_id,
-            result.queued,
-            names,
-        )
+        self._channel.reply_text(chat_id, result.message)
+        try:
+            self._channel.send_file(chat_id, result.csv_path)
+        except NotImplementedError:
+            self._channel.reply_text(
+                chat_id,
+                f"当前通道暂不支持发文件，CSV 已生成：{result.csv_path}",
+            )
+        except Exception as exc:
+            self._channel.reply_text(chat_id, f"发送 CSV 失败：{exc}")
 
     def _enqueue_urls(
         self, chat_id: str, urls: list[str], *, ack: bool = True
@@ -117,16 +102,15 @@ class Courier:
             self._stop.wait(config.POLL_SEC)
 
     def _tick(self) -> None:
-        status = read_queue_status(config.QUEUE_STATUS_FILE)
         with self._lock:
             jobs = [j for j in self._jobs.values() if not j.finished]
         for job in jobs:
-            _actives, dones = list_by_source(status, job.source_file)
-            for done in dones:
+            for done in _list_undelivered(job.source_file):
                 task_id = str(done.get("task_id") or "")
                 if not task_id or task_id in job.delivered_ids:
                     continue
                 if self._deliver_done(job, done):
+                    _mark_delivered(task_id)
                     with self._lock:
                         job.delivered_ids.add(task_id)
                         if job.finished:
@@ -137,7 +121,6 @@ class Courier:
                             )
 
     def _deliver_done(self, job: PendingJob, done: dict) -> bool:
-        """Handle one finished task. True = consumed (do not retry)."""
         st = str(done.get("status") or "")
         task_id = str(done.get("task_id") or "")
         label = str(done.get("label") or done.get("filename") or task_id)
@@ -165,3 +148,52 @@ class Courier:
         err = done.get("error") or st
         self._channel.reply_text(job.chat_id, f"任务结束：{label}\n{st}\n{err}")
         return True
+
+
+def _list_undelivered(source_file: str) -> list[dict]:
+    db = Path(config.TASKS_DB)
+    if not db.is_file():
+        return []
+    name = Path(source_file).name
+    uri = f"file:{db.resolve().as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=30.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT task_id, status, label, filename, error, result_csv,
+                   buf_done_zip, finished_at
+            FROM tasks
+            WHERE source_file=?
+              AND status IN (
+                'success','decrypt_failed','assets_missing',
+                'abnormal_exit','failed','timeout'
+              )
+              AND (im_delivered_at IS NULL OR im_delivered_at='')
+            ORDER BY finished_at ASC, updated_at ASC
+            """,
+            (name,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _mark_delivered(task_id: str) -> None:
+    db = Path(config.TASKS_DB)
+    if not db.is_file():
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    conn = sqlite3.connect(str(db), timeout=30.0)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE tasks SET im_delivered_at=?, updated_at=? WHERE task_id=?",
+            (now, now, task_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
