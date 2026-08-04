@@ -38,10 +38,17 @@ ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 POLL_SEC = float(os.environ.get("POLL_SEC", "3") or "3")
 ZIP_WAIT_SEC = float(os.environ.get("ZIP_WAIT_SEC", "600") or "600")
 
+# Optional pin. Empty → auto-learn last active chat into ANNOUNCE_CHAT_STATE.
 _announce = (os.environ.get("ANNOUNCE_CHAT_ID") or "").strip()
 if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
 ANNOUNCE_CHAT_ID = _announce
+ANNOUNCE_CHAT_STATE = Path(
+    os.environ.get(
+        "ANNOUNCE_CHAT_STATE",
+        str(_APP_ROOT / "state" / "announce_chat.json"),
+    )
+)
 
 CORE_HEARTBEAT_PATH = Path(
     os.environ.get(

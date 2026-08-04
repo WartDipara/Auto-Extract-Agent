@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import config
+from announce_chat import resolve_announce_chat, save_learned_chat
 from channels.base import Channel
 from inbox_writer import new_request_id, write_inbox_json
 from ops_commands import parse_ops_command
@@ -74,14 +75,25 @@ class Courier:
                 pass
 
     def _announce(self, text: str) -> None:
-        chat_id = (config.ANNOUNCE_CHAT_ID or "").strip()
+        chat_id = resolve_announce_chat(
+            pinned=config.ANNOUNCE_CHAT_ID,
+            state_path=Path(config.ANNOUNCE_CHAT_STATE),
+        )
         if not chat_id:
-            _log.warning("ANNOUNCE_CHAT_ID empty; skip announce: %s", text)
+            _log.info(
+                "announce skipped (no chat yet); "
+                "will learn from first @mention unless ANNOUNCE_CHAT_ID is pinned"
+            )
             return
         try:
             self._channel.reply_text(chat_id, text)
         except Exception:
             _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
+
+    def _remember_chat(self, chat_id: str) -> None:
+        if (config.ANNOUNCE_CHAT_ID or "").strip():
+            return
+        save_learned_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
 
     def _announce_offline_once(self) -> None:
         if self._offline_announced:
@@ -90,6 +102,7 @@ class Courier:
         self._announce(config.MSG_BOT_OFFLINE)
 
     def on_message(self, chat_id: str, text: str) -> None:
+        self._remember_chat(chat_id)
         cmd = parse_ops_command(text)
         if cmd is not None:
             self._handle_ops(chat_id, cmd)

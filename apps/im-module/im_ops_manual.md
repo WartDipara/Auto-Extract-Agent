@@ -173,7 +173,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Item | Note |
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
-| Announce chat | `ANNOUNCE_CHAT_ID` (DingTalk may fall back to `DINGTALK_TEST_CHAT_ID`) |
+| Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
 | Lifecycle | Online / offline messages to announce chat; core fault/recover is edge-only (no spam) |
 | Core heartbeat | Module A writes `state/heartbeat` every 10s; IM marks stale after `CORE_HEARTBEAT_STALE_SEC` (default 45) |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |

@@ -345,8 +345,15 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
 
     # Empty announce chat → skip without crash
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", tmp_path / "announce_chat.json")
     ch.texts.clear()
     c._core_fault_announced = False
     hb.unlink()
     c._check_core_health()
     assert ch.texts == []
+
+    # Learn from first inbound message, then announce works
+    c.on_message("group:cid-learned", "help")
+    c._core_fault_announced = False
+    c._check_core_health()
+    assert ch.texts[-1] == ("group:cid-learned", config.MSG_CORE_DOWN)

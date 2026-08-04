@@ -113,7 +113,10 @@ class DingTalkChannel:
             self._robot_code,
             ChatbotMessage.TOPIC,
         )
-        client.start_forever()
+        try:
+            client.start_forever()
+        except (SystemExit, KeyboardInterrupt):
+            _log.info("dingtalk stream stopped")
 
     def handle_incoming(self, msg: ChatbotMessage) -> None:
         if self._seen.is_duplicate(msg.message_id):
