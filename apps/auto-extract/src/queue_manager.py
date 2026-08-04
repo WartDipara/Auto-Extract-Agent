@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import datetime
 import json
 import logging
 import threading
@@ -10,6 +9,7 @@ import config
 import pipeline_queues as pq
 import task_store
 from models import TERMINAL_STATUSES, QueueState, Task
+from shared.archive_contract import utc_now
 
 _log = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def _write_status_unlocked() -> None:
     ]
     recent = [_task_to_dict(t) for t in task_store.list_recent_done(config.QUEUE_RECENT_DONE_MAX)]
     payload = {
-        "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "updated_at": utc_now(),
         "active": active,
         "recent_done": recent,
     }
@@ -139,7 +139,7 @@ def append_session_record(task: Task):
         "status": task.status,
         "result_csv": task.result_csv,
         "source_file": task.source_file,
-        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "finished_at": utc_now(),
     }
     with config.SESSIONS_FILE.open("a", encoding="utf-8") as fp:
         fp.write(json.dumps(record, ensure_ascii=False) + "\n")

@@ -37,9 +37,10 @@ ZIP_WAIT_SEC = float(os.environ.get("ZIP_WAIT_SEC", "600") or "600")
 
 OPS_TEMPLATE = (
     "Usage:\n"
-    "1) Query ledger (CSV file reply)\n"
+    "1) Query ledger (text reply; times in Asia/Shanghai)\n"
+    "   @bot query progress\n"
     "   @bot query all\n"
-    "   @bot query top_n 20\n"
+    "   @bot query top_n 10\n"
     "   @bot query gid t-0002\n"
     "   @bot query status success\n"
     "2) Enqueue (paste APK URL(s), one per line or space-separated)\n"

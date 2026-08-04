@@ -21,6 +21,19 @@ LEDGER_STATUSES = frozenset(
     }
 )
 
+TERMINAL_STATUSES = frozenset(
+    {
+        "success",
+        "decrypt_failed",
+        "assets_missing",
+        "abnormal_exit",
+        "failed",
+        "timeout",
+    }
+)
+
+ACTIVE_STATUSES = frozenset(s for s in LEDGER_STATUSES if s not in TERMINAL_STATUSES)
+
 _HELP_ALIASES = frozenset({"help", "?"})
 _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 
@@ -49,6 +62,8 @@ def parse_ops_command(text: str) -> OpsCommand | None:
     tail = parts[1].strip() if len(parts) > 1 else ""
     if mode == "all":
         return OpsCommand(kind="query_all")
+    if mode == "progress":
+        return OpsCommand(kind="query_progress")
     if mode == "top_n":
         return OpsCommand(kind="query_top_n", arg=tail)
     if mode == "gid":

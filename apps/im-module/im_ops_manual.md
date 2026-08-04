@@ -13,7 +13,7 @@ In group chats you must **@bot** before the body (DingTalk requires an explicit 
 | Intent | What to send | Bot response |
 | ------ | ------------ | ------------ |
 | Enqueue extract | APK URL(s) (see 2) | Write Module A inbox; deliver result when done |
-| Query ledger | `query …` (see 3) | Read-only SQLite → CSV file (or not-found text) |
+| Query ledger | `query …` (see 3) | Read-only SQLite → compact **text** (no CSV) |
 | Help | `help` / `?` / bare `query` | Usage summary |
 | Other | Free text | `unknown command` + usage |
 
@@ -68,25 +68,31 @@ Ledger statuses: section 4. Pipeline runs inside Module A.
 
 ## 3. Query ledger
 
-Source: Module A `tasks.db`.
-On success: a one-line summary, then a **CSV file**. If the channel cannot send files, a local path hint is returned.
+Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
+Replies are **plain text only** (chat length capped ~3500 chars). Displayed times use **Asia/Shanghai**.
 
-### 3.1 All rows
+Columns shown: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`.
+
+### 3.1 Progress (active queue)
+
+```text
+@bot query progress
+```
+
+- Non-terminal statuses only (`queued` … `extract_done`).
+- Max **30** rows; no error/time noise.
+
+### 3.2 All / latest N / status
 
 ```text
 @bot query all
+@bot query top_n 10
+@bot query status timeout
 ```
 
-- Hard cap 50000 rows; truncated exports include `truncated=true`.
-
-### 3.2 Latest N
-
-```text
-@bot query top_n 20
-```
-
-- `N` must be an integer in **1–1000**.
-- Ordered by `updated_at` DESC.
+- `all` / `status`: max **20** rows (newest first).
+- `top_n`: `N` in **1–30**.
+- Truncation footer points to `query gid` / `query top_n`.
 
 ### 3.3 By id / filename / URL
 
@@ -97,17 +103,9 @@ On success: a one-line summary, then a **CSV file**. If the channel cannot send 
 ```
 
 - Match order: `task_id` → `filename` → `url` (exact).
-- Miss: text `not found: …` (no empty CSV).
+- Miss: `not found: …`.
 
-### 3.4 By status
-
-```text
-@bot query status success
-```
-
-Valid `status` values: section 4. Invalid values list the allowed set.
-
-### 3.5 Help
+### 3.4 Help
 
 ```text
 @bot help
@@ -139,7 +137,7 @@ Status is written only at stage boundaries (not progress percentages).
 | `timeout` | Timeout |
 
 
-CSV columns typically: `task_id,url,label,filename,status,error,result_csv,session_id,buf_done_zip,source_file,adb_serial,created_at,updated_at,finished_at,im_delivered_at`.
+Chat shows a slim subset; full fields remain in `tasks.db`.
 
 ---
 
@@ -158,7 +156,7 @@ CSV columns typically: `task_id,url,label,filename,status,error,result_csv,sessi
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
-| Query export dir | default `apps/im-module/state/query_exports` |
+| Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Runtime | Module A and IM both required; IM alone cannot extract |
 
 

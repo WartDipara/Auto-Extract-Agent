@@ -57,19 +57,7 @@ class Courier:
 
     def _handle_ops(self, chat_id: str, cmd) -> None:
         result = run_ledger_query(cmd)
-        if not result.ok or result.csv_path is None:
-            self._channel.reply_text(chat_id, result.message)
-            return
         self._channel.reply_text(chat_id, result.message)
-        try:
-            self._channel.send_file(chat_id, result.csv_path)
-        except NotImplementedError:
-            self._channel.reply_text(
-                chat_id,
-                f"当前通道暂不支持发文件，CSV 已生成：{result.csv_path}",
-            )
-        except Exception as exc:
-            self._channel.reply_text(chat_id, f"发送 CSV 失败：{exc}")
 
     def _enqueue_urls(
         self, chat_id: str, urls: list[str], *, ack: bool = True

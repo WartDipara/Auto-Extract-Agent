@@ -152,6 +152,7 @@ def test_ops_commands_parse():
 
     importlib.reload(ops_commands)
     assert ops_commands.parse_ops_command("query all").kind == "query_all"
+    assert ops_commands.parse_ops_command("query progress").kind == "query_progress"
     assert ops_commands.parse_ops_command("query top_n 20").arg == "20"
     assert ops_commands.parse_ops_command("query gid t-1").arg == "t-1"
     assert ops_commands.parse_ops_command("query status success").arg == "success"
@@ -160,7 +161,7 @@ def test_ops_commands_parse():
     assert ops_commands.parse_ops_command('{"get-texts":{"urls":["x"]}}') is None
 
 
-def test_ledger_query_export(tmp_path, monkeypatch):
+def test_ledger_query_text(tmp_path, monkeypatch):
     if str(_A_SRC) in sys.path:
         sys.path.remove(str(_A_SRC))
     sys.path.insert(0, str(_IM_SRC))
@@ -171,9 +172,7 @@ def test_ledger_query_export(tmp_path, monkeypatch):
 
     importlib.reload(im_config)
     db = tmp_path / "tasks.db"
-    export = tmp_path / "exports"
     monkeypatch.setattr(im_config, "TASKS_DB", db)
-    monkeypatch.setattr(im_config, "QUERY_EXPORT_DIR", export)
 
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -201,9 +200,29 @@ def test_ledger_query_export(tmp_path, monkeypatch):
             "",
             "im_1.json",
             "",
-            "2026-01-01",
-            "2026-01-02",
-            "2026-01-02",
+            "2026-08-04T12:01:00Z",
+            "2026-08-04T12:01:00Z",
+            "2026-08-04T12:01:00Z",
+            "",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "t-0002",
+            "https://x/b.apk",
+            "ActiveGame",
+            "b.apk",
+            "on_extract",
+            "",
+            "",
+            "",
+            "",
+            "im_1.json",
+            "",
+            "2026-08-04T12:00:00Z",
+            "2026-08-04T12:00:30Z",
+            "",
             "",
         ),
     )
@@ -216,10 +235,30 @@ def test_ledger_query_export(tmp_path, monkeypatch):
     importlib.reload(ops_commands)
     importlib.reload(task_ledger_query)
 
+    assert task_ledger_query.to_shanghai("2026-08-04T12:01:00Z") == "2026-08-04 20:01:00"
+
     r = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_all")
     )
-    assert r.ok and r.row_count == 1 and r.csv_path and r.csv_path.is_file()
+    assert r.ok and r.row_count == 2 and r.csv_path is None
+    assert "t-0001" in r.message and "Game" in r.message
+    assert "exported" not in r.message
+
+    prog = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="query_progress")
+    )
+    assert prog.ok and "progress:" in prog.message and "t-0002" in prog.message
+    assert "t-0001" not in prog.message
+
+    gid = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="query_gid", arg="t-0001")
+    )
+    assert gid.ok and "2026-08-04 20:01:00" in gid.message
+
+    bad_n = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="query_top_n", arg="100")
+    )
+    assert not bad_n.ok and "1–30" in bad_n.message
 
     miss = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_gid", arg="nope")

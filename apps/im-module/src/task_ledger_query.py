@@ -1,33 +1,29 @@
 from __future__ import annotations
 
-import csv
 import datetime as dt
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import config
-from ops_commands import LEDGER_STATUSES, OpsCommand, is_valid_ledger_status
-
-_EXPORT_COLS = (
-    "task_id",
-    "url",
-    "label",
-    "filename",
-    "status",
-    "error",
-    "result_csv",
-    "session_id",
-    "buf_done_zip",
-    "source_file",
-    "adb_serial",
-    "created_at",
-    "updated_at",
-    "finished_at",
-    "im_delivered_at",
+from ops_commands import (
+    ACTIVE_STATUSES,
+    LEDGER_STATUSES,
+    OpsCommand,
+    TERMINAL_STATUSES,
+    is_valid_ledger_status,
 )
 
-_ALL_HARD_CAP = 50000
+_DISPLAY_COLS = ("task_id", "label", "status", "error", "updated_at")
+_SHANGHAI = ZoneInfo("Asia/Shanghai")
+_CHAR_BUDGET = 3500
+_LIST_ROW_CAP = 20
+_PROGRESS_ROW_CAP = 30
+_TOP_N_MAX = 30
+_LABEL_MAX = 20
+_LIST_ERROR_MAX = 80
+_GID_ERROR_MAX = 200
 
 
 @dataclass
@@ -49,78 +45,82 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def _write_csv(rows: list[sqlite3.Row], mode: str) -> Path:
-    out_dir = Path(config.QUERY_EXPORT_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = out_dir / f"tasks_{mode}_{stamp}.csv"
-    with path.open("w", encoding="utf-8-sig", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=_EXPORT_COLS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({c: row[c] if c in row.keys() else "" for c in _EXPORT_COLS})
-    return path
+def to_shanghai(iso_utc: str) -> str:
+    """UTC ISO (…Z or offset) → Asia/Shanghai wall time for chat display."""
+    raw = (iso_utc or "").strip()
+    if not raw:
+        return "-"
+    try:
+        normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        parsed = dt.datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(_SHANGHAI).strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return raw
+
+
+def _clip(text: str, max_len: int) -> str:
+    s = " ".join((text or "").split())
+    if len(s) <= max_len:
+        return s
+    if max_len <= 1:
+        return s[:max_len]
+    return s[: max_len - 1] + "…"
+
+
+def _is_failure_terminal(status: str) -> bool:
+    return status in TERMINAL_STATUSES and status != "success"
+
+
+def _format_progress(rows: list[sqlite3.Row], total: int) -> str:
+    lines = [f"progress: {total} active"]
+    for row in rows:
+        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
+        lines.append(f"{row['task_id']}  {label}  {row['status']}")
+    body = "\n".join(lines)
+    if total > len(rows):
+        body += f"\n… showing {len(rows)}/{total}, use query gid <id> or query top_n N"
+    return _fit_budget(body)
+
+
+def _format_list(rows: list[sqlite3.Row], *, header: str, total: int) -> str:
+    lines = [header]
+    for row in rows:
+        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
+        line = f"{row['task_id']}  {label}  {row['status']}"
+        status = str(row["status"] or "")
+        if _is_failure_terminal(status):
+            err = _clip(str(row["error"] or ""), _LIST_ERROR_MAX)
+            if err:
+                line = f"{line}  {err}"
+        lines.append(line)
+    body = "\n".join(lines)
+    if total > len(rows):
+        body += f"\n… showing {len(rows)}/{total}, use query gid <id> or query top_n N"
+    return _fit_budget(body)
+
+
+def _format_gid(rows: list[sqlite3.Row]) -> str:
+    blocks: list[str] = []
+    for row in rows:
+        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
+        when = to_shanghai(str(row["updated_at"] or ""))
+        head = f"{row['task_id']}  {label}  {row['status']}  {when}"
+        err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
+        blocks.append(f"{head}\n{err}" if err else head)
+    return _fit_budget("\n\n".join(blocks))
+
+
+def _fit_budget(text: str) -> str:
+    if len(text) <= _CHAR_BUDGET:
+        return text
+    cut = text[: _CHAR_BUDGET - 20].rstrip()
+    return cut + "\n… truncated"
 
 
 def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
     if cmd.kind == "help":
-        return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
-
-    if cmd.kind == "query_top_n":
-        try:
-            n = int((cmd.arg or "").strip())
-        except ValueError:
-            return LedgerQueryResult(
-                ok=False,
-                message=f"top_n requires an integer.\n{config.OPS_TEMPLATE}",
-            )
-        if n < 1 or n > 1000:
-            return LedgerQueryResult(
-                ok=False,
-                message=f"top_n must be 1–1000.\n{config.OPS_TEMPLATE}",
-            )
-        sql = (
-            f"SELECT {', '.join(_EXPORT_COLS)} FROM tasks "
-            "ORDER BY updated_at DESC LIMIT ?"
-        )
-        params: tuple = (n,)
-        mode = f"top_{n}"
-    elif cmd.kind == "query_status":
-        status = (cmd.arg or "").strip()
-        if not is_valid_ledger_status(status):
-            allowed = ", ".join(sorted(LEDGER_STATUSES))
-            return LedgerQueryResult(
-                ok=False,
-                message=f"invalid status. allowed: {allowed}\n{config.OPS_TEMPLATE}",
-            )
-        sql = (
-            f"SELECT {', '.join(_EXPORT_COLS)} FROM tasks "
-            "WHERE status=? ORDER BY updated_at DESC"
-        )
-        params = (status,)
-        mode = f"status_{status}"
-    elif cmd.kind == "query_gid":
-        gid = (cmd.arg or "").strip()
-        if not gid:
-            return LedgerQueryResult(
-                ok=False,
-                message=f"gid is required.\n{config.OPS_TEMPLATE}",
-            )
-        sql = (
-            f"SELECT {', '.join(_EXPORT_COLS)} FROM tasks "
-            "WHERE task_id=? OR filename=? OR url=? "
-            "ORDER BY updated_at DESC"
-        )
-        params = (gid, gid, gid)
-        mode = "gid"
-    elif cmd.kind == "query_all":
-        sql = (
-            f"SELECT {', '.join(_EXPORT_COLS)} FROM tasks "
-            "ORDER BY updated_at DESC LIMIT ?"
-        )
-        params = (_ALL_HARD_CAP + 1,)
-        mode = "all"
-    else:
         return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
 
     try:
@@ -128,27 +128,129 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
     except FileNotFoundError as exc:
         return LedgerQueryResult(ok=False, message=str(exc))
 
+    cols = ", ".join(_DISPLAY_COLS)
     try:
-        rows = list(conn.execute(sql, params).fetchall())
+        if cmd.kind == "query_progress":
+            placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
+            statuses = tuple(sorted(ACTIVE_STATUSES))
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM tasks WHERE status IN ({placeholders})",
+                statuses,
+            ).fetchone()[0]
+            rows = list(
+                conn.execute(
+                    f"SELECT {cols} FROM tasks WHERE status IN ({placeholders}) "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (*statuses, _PROGRESS_ROW_CAP),
+                ).fetchall()
+            )
+            msg = _format_progress(rows, int(total))
+            return LedgerQueryResult(
+                ok=True,
+                message=msg,
+                row_count=len(rows),
+                truncated=int(total) > len(rows),
+            )
+
+        if cmd.kind == "query_top_n":
+            try:
+                n = int((cmd.arg or "").strip())
+            except ValueError:
+                return LedgerQueryResult(
+                    ok=False,
+                    message=f"top_n requires an integer.\n{config.OPS_TEMPLATE}",
+                )
+            if n < 1 or n > _TOP_N_MAX:
+                return LedgerQueryResult(
+                    ok=False,
+                    message=f"top_n must be 1–{_TOP_N_MAX}.\n{config.OPS_TEMPLATE}",
+                )
+            rows = list(
+                conn.execute(
+                    f"SELECT {cols} FROM tasks ORDER BY updated_at DESC LIMIT ?",
+                    (n,),
+                ).fetchall()
+            )
+            msg = _format_list(
+                rows,
+                header=f"top_n={n}  {len(rows)} shown",
+                total=len(rows),
+            )
+            return LedgerQueryResult(ok=True, message=msg, row_count=len(rows))
+
+        if cmd.kind == "query_status":
+            status = (cmd.arg or "").strip()
+            if not is_valid_ledger_status(status):
+                allowed = ", ".join(sorted(LEDGER_STATUSES))
+                return LedgerQueryResult(
+                    ok=False,
+                    message=f"invalid status. allowed: {allowed}\n{config.OPS_TEMPLATE}",
+                )
+            total = conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status=?", (status,)
+            ).fetchone()[0]
+            rows = list(
+                conn.execute(
+                    f"SELECT {cols} FROM tasks WHERE status=? "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (status, _LIST_ROW_CAP),
+                ).fetchall()
+            )
+            msg = _format_list(
+                rows,
+                header=f"status={status}  {len(rows)} shown",
+                total=int(total),
+            )
+            return LedgerQueryResult(
+                ok=True,
+                message=msg,
+                row_count=len(rows),
+                truncated=int(total) > len(rows),
+            )
+
+        if cmd.kind == "query_gid":
+            gid = (cmd.arg or "").strip()
+            if not gid:
+                return LedgerQueryResult(
+                    ok=False,
+                    message=f"gid is required.\n{config.OPS_TEMPLATE}",
+                )
+            rows = list(
+                conn.execute(
+                    f"SELECT {cols} FROM tasks "
+                    "WHERE task_id=? OR filename=? OR url=? "
+                    "ORDER BY updated_at DESC LIMIT 5",
+                    (gid, gid, gid),
+                ).fetchall()
+            )
+            if not rows:
+                return LedgerQueryResult(
+                    ok=True, message=f"not found: {gid}", row_count=0
+                )
+            return LedgerQueryResult(
+                ok=True, message=_format_gid(rows), row_count=len(rows)
+            )
+
+        if cmd.kind == "query_all":
+            total = conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            rows = list(
+                conn.execute(
+                    f"SELECT {cols} FROM tasks ORDER BY updated_at DESC LIMIT ?",
+                    (_LIST_ROW_CAP,),
+                ).fetchall()
+            )
+            msg = _format_list(
+                rows,
+                header=f"all  {len(rows)} shown",
+                total=int(total),
+            )
+            return LedgerQueryResult(
+                ok=True,
+                message=msg,
+                row_count=len(rows),
+                truncated=int(total) > len(rows),
+            )
+
+        return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
     finally:
         conn.close()
-
-    if cmd.kind == "query_gid" and not rows:
-        return LedgerQueryResult(ok=True, message=f"not found: {cmd.arg}", row_count=0)
-
-    truncated = False
-    if cmd.kind == "query_all" and len(rows) > _ALL_HARD_CAP:
-        rows = rows[:_ALL_HARD_CAP]
-        truncated = True
-
-    path = _write_csv(rows, mode)
-    msg = f"exported {len(rows)} rows"
-    if truncated:
-        msg += " truncated=true"
-    return LedgerQueryResult(
-        ok=True,
-        message=msg,
-        csv_path=path,
-        row_count=len(rows),
-        truncated=truncated,
-    )
