@@ -42,6 +42,6 @@ OPS_TEMPLATE = (
     "   @bot query top_n 20\n"
     "   @bot query gid t-0002\n"
     "   @bot query status success\n"
-    "2) Enqueue\n"
-    "   @bot {\"get-texts\":{\"urls\":[\"https://example.com/game.apk\"]}}"
+    "2) Enqueue (paste APK URL(s), one per line or space-separated)\n"
+    "   @bot https://example.com/game.apk"
 )

@@ -5,6 +5,8 @@ import re
 from typing import Any
 
 _CODE_FENCE = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_TRAIL_PUNCT = ".,;:)]}>\"'"
 
 
 def extract_json_object(text: str) -> dict[str, Any] | None:
@@ -42,12 +44,30 @@ def validate_get_texts(payload: dict[str, Any]) -> list[str] | None:
     return cleaned or None
 
 
+def extract_urls(text: str) -> list[str]:
+    """Pull http(s) URLs; strip trailing punctuation; dedupe preserving order."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in _URL_RE.finditer(text or ""):
+        url = m.group(0).rstrip(_TRAIL_PUNCT)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        found.append(url)
+    return found
+
+
 def parse_task_message(text: str) -> dict[str, Any] | None:
-    """Return inbox root object or None."""
+    """Return inbox root object or None.
+
+    Prefer legacy get-texts JSON; otherwise accept bare pasted URL(s).
+    """
     data = extract_json_object(text)
-    if data is None:
-        return None
-    urls = validate_get_texts(data)
-    if urls is None:
+    if data is not None:
+        urls = validate_get_texts(data)
+        if urls is not None:
+            return {"get-texts": {"urls": urls}}
+    urls = extract_urls(text)
+    if not urls:
         return None
     return {"get-texts": {"urls": urls}}

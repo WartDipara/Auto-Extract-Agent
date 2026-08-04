@@ -33,7 +33,37 @@ def test_parse_task_message_reject():
     from parser import parse_task_message
 
     assert parse_task_message("not json") is None
+    assert parse_task_message("") is None
     assert parse_task_message('{"get-texts":{"urls":[]}}') is None
+
+
+def test_parse_task_message_bare_urls():
+    from parser import parse_task_message
+
+    assert parse_task_message("https://a.apk") == {
+        "get-texts": {"urls": ["https://a.apk"]}
+    }
+    multi = parse_task_message(
+        "https://cdn.example.com/a.apk\nhttps://cdn.example.com/b.apk"
+    )
+    assert multi == {
+        "get-texts": {
+            "urls": [
+                "https://cdn.example.com/a.apk",
+                "https://cdn.example.com/b.apk",
+            ]
+        }
+    }
+    spaced = parse_task_message(
+        "please https://x.apk https://y.apk, thanks"
+    )
+    assert spaced == {
+        "get-texts": {"urls": ["https://x.apk", "https://y.apk"]}
+    }
+    # dedupe preserve order
+    assert parse_task_message("https://a.apk https://a.apk https://b.apk") == {
+        "get-texts": {"urls": ["https://a.apk", "https://b.apk"]}
+    }
 
 
 def test_write_inbox_json(tmp_path):

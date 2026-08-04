@@ -12,33 +12,38 @@ In group chats you must **@bot** before the body (DingTalk requires an explicit 
 
 | Intent | What to send | Bot response |
 | ------ | ------------ | ------------ |
-| Enqueue extract | JSON (see 2) | Write Module A inbox; deliver result when done |
+| Enqueue extract | APK URL(s) (see 2) | Write Module A inbox; deliver result when done |
 | Query ledger | `query …` (see 3) | Read-only SQLite → CSV file (or not-found text) |
 | Help | `help` / `?` / bare `query` | Usage summary |
 | Other | Free text | `unknown command` + usage |
 
 
-Match order: ops command (query/help) → JSON enqueue → otherwise reject.
+Match order: ops command (query/help) → enqueue (URLs or legacy JSON) → otherwise reject.
 
 ---
 
 ## 2. Enqueue
 
-### Format
+### Format (preferred)
 
-```json
-{"get-texts":{"urls":["https://example.com/game.apk"]}}
-```
-
-- Multiple URLs allowed; empty list is invalid.
-- Extra prose or markdown code fences are OK; the bot extracts JSON.
-- URLs are trimmed; empty/invalid entries are skipped.
-
-### Example
+Paste one or more `http://` / `https://` URLs after `@bot`. One per line, or space-separated on one line.
 
 ```text
-@bot {"get-texts":{"urls":["https://cdn.example.com/a.apk","https://cdn.example.com/b.apk"]}}
+@bot https://cdn.example.com/a.apk
+https://cdn.example.com/b.apk
 ```
+
+- Extra words around URLs are OK; the bot extracts `http(s)://…` tokens.
+- Duplicate URLs are dropped (order preserved).
+- No URL → rejected.
+
+Inbox still stores the Module A schema:
+
+```json
+{"get-texts":{"urls":["https://cdn.example.com/a.apk","https://cdn.example.com/b.apk"]}}
+```
+
+Legacy chat JSON / markdown code-fence JSON in that shape is still accepted.
 
 ### Ack
 
