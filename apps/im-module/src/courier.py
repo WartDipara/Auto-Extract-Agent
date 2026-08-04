@@ -39,6 +39,7 @@ class Courier:
         self._jobs: dict[str, PendingJob] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._online_announced = False
         self._offline_announced = False
         self._core_fault_announced = False
         self._hooks_registered = False
@@ -46,7 +47,7 @@ class Courier:
     def start(self) -> None:
         self._register_lifecycle_hooks()
         threading.Thread(target=self._poll_loop, name="im-poll", daemon=True).start()
-        self._announce(config.MSG_BOT_ONLINE)
+        self._announce_online()
         try:
             self._channel.start(self.on_message)
         except KeyboardInterrupt:
@@ -83,7 +84,7 @@ class Courier:
             except (ValueError, OSError):
                 pass
 
-    def _announce(self, text: str) -> None:
+    def _announce(self, text: str) -> bool:
         chat_id = resolve_announce_chat(
             pinned=config.ANNOUNCE_CHAT_ID,
             state_path=Path(config.ANNOUNCE_CHAT_STATE),
@@ -93,16 +94,28 @@ class Courier:
                 "announce skipped (no chat yet); "
                 "will learn from first @mention unless ANNOUNCE_CHAT_ID is pinned"
             )
-            return
+            return False
         try:
             self._channel.reply_text(chat_id, text)
+            return True
         except Exception:
             _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
+            return False
+
+    def _announce_online(self) -> None:
+        if self._online_announced:
+            return
+        text = f"{config.MSG_BOT_ONLINE}\n\n{config.OPS_TEMPLATE}"
+        if self._announce(text):
+            self._online_announced = True
 
     def _remember_chat(self, chat_id: str) -> None:
         if (config.ANNOUNCE_CHAT_ID or "").strip():
             return
-        save_learned_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
+        changed = save_learned_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
+        # First learned chat after cold start: send online + usage once.
+        if changed and not self._online_announced:
+            self._announce_online()
 
     def _announce_offline_once(self) -> None:
         if self._offline_announced:
@@ -114,11 +127,14 @@ class Courier:
         self._remember_chat(chat_id)
         cmd = parse_ops_command(text)
         if cmd is not None:
+            if cmd.kind == "greet":
+                self._channel.reply_text(chat_id, config.MSG_GREET)
+                return
             self._handle_ops(chat_id, cmd)
             return
         payload = parse_task_message(text)
         if payload is None:
-            self._channel.reply_text(chat_id, f"没看懂这条指令。\n{config.OPS_TEMPLATE}")
+            self._channel.reply_text(chat_id, f"Lino没看懂这条指令。\n{config.OPS_TEMPLATE}")
             return
         self._enqueue_urls(chat_id, payload["get-texts"]["urls"])
 

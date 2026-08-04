@@ -36,6 +36,12 @@ ACTIVE_STATUSES = frozenset(s for s in LEDGER_STATUSES if s not in TERMINAL_STAT
 
 _HELP_ALIASES = frozenset({"help", "?"})
 _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+_GREET_RE = re.compile(
+    r"^(你好|您好|哈喽|嗨|在吗|在不在|早上好|下午好|晚上好|hi|hello|hey)"
+    r"[呀啊哦呢嘛]*"
+    r"[!！?？.。~～]*$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,8 @@ def parse_ops_command(text: str) -> OpsCommand | None:
     lower = raw.lower()
     if lower in _HELP_ALIASES or lower == "query":
         return OpsCommand(kind="help")
+    if _GREET_RE.match(raw):
+        return OpsCommand(kind="greet")
     m = _QUERY_HEAD.match(raw)
     if not m:
         return None

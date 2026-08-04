@@ -10,7 +10,6 @@ _REPO_ROOT = _APP_ROOT.parent.parent
 _AUTO = _REPO_ROOT / "apps" / "auto-extract"
 
 load_dotenv(_APP_ROOT / ".env")
-# Shared Module A secrets (e.g. ZIP_PASSWORD); do not override IM vars.
 load_dotenv(_AUTO / ".env", override=False)
 
 IM_CHANNEL = os.environ.get("IM_CHANNEL", "feishu").strip().lower() or "feishu"
@@ -38,7 +37,6 @@ ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 POLL_SEC = float(os.environ.get("POLL_SEC", "3") or "3")
 ZIP_WAIT_SEC = float(os.environ.get("ZIP_WAIT_SEC", "600") or "600")
 
-# Optional pin. Empty → auto-learn last active chat into ANNOUNCE_CHAT_STATE.
 _announce = (os.environ.get("ANNOUNCE_CHAT_ID") or "").strip()
 if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
@@ -61,22 +59,32 @@ CORE_HEARTBEAT_STALE_SEC = float(
 )
 
 MSG_BOT_ONLINE = "Lino已就位，可以开始工作了"
-MSG_BOT_OFFLINE = "Lino目前有事，先走开了"
-MSG_CORE_DOWN = "出故障了，等我去修修再来！"
-MSG_CORE_UP = "搞定了，又可以正常运作力"
+MSG_BOT_OFFLINE = "Lino目前有急事，先走开了"
+MSG_CORE_DOWN = "出故障了：（ 等我去修修"
+MSG_CORE_UP = "搞定了，又可以正常工作了"
 
+BOT_NAME = "Lino"
 OPS_TEMPLATE = (
     "用法：\n"
-    "\n"
     "【提交任务】直接填入APK的下载链接，可多条\n"
-    "  @bot https://example.com/a.apk\n"
+    "  @艺术家 https://example.com/a.apk\n"
+    "  @艺术家 https://example.com/b.apk\n"
+    "  ......\n"
     "\n"
     "【查询】\n"
-    "  query progress          查询进行中的任务\n"
-    "  query status success    按状态筛选（如 success / failed / timeout）\n"
-    "  query gid t-000       查单个任务\n"
-    "  query export           导出全表 Excel\n"
-    "  query password         查看一下解压密码\n"
+    "  @艺术家 query progress          查询进行中的任务\n"
+    "  @艺术家 query status success    按状态筛选（如 success / failed / timeout）\n"
+    "  @艺术家 query gid t-000       查单个任务\n"
+    "  @艺术家 query export           导出全表 Excel\n"
+    "  @艺术家 query password         查看一下解压密码\n"
     "\n"
-    "【帮助】help  或  ?"
+    "【帮助】help / ?    【打招呼】你好 / hi"
+)
+MSG_GREET = (
+    f"你好，我是{BOT_NAME}～\n"
+    "我负责指挥流程！你把下载链接发给我"
+    "我会安排专人帮你解决问题的"
+    "完成后把结果发回给你。\n"
+    "\n"
+    f"{OPS_TEMPLATE}"
 )

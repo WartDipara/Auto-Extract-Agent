@@ -157,6 +157,9 @@ def test_ops_commands_parse():
     assert ops_commands.parse_ops_command("query gid t-1").arg == "t-1"
     assert ops_commands.parse_ops_command("query status success").arg == "success"
     assert ops_commands.parse_ops_command("help").kind == "help"
+    assert ops_commands.parse_ops_command("你好").kind == "greet"
+    assert ops_commands.parse_ops_command("你好呀！").kind == "greet"
+    assert ops_commands.parse_ops_command("Hello").kind == "greet"
     assert ops_commands.parse_ops_command("query all").kind == "help"
     assert ops_commands.parse_ops_command("query top_n 20").kind == "help"
     assert ops_commands.parse_ops_command("查询表格 all") is None

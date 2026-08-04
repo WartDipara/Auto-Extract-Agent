@@ -12,13 +12,14 @@ In group chats you must **@bot** before the body (DingTalk requires an explicit 
 
 | Intent | What to send | Bot response |
 | ------ | ------------ | ------------ |
+| Greeting | `你好` / `hi` / `hello` … | Self-intro + usage |
 | Enqueue extract | APK URL(s) (see 2) | Write Module A inbox; deliver result when done |
 | Query ledger | `query …` (see 3) | Text glance, or Excel via `query export` |
 | Help | `help` / `?` / bare `query` | Usage summary |
-| Other | Free text | `unknown command` + usage |
+| Other | Free text | `没看懂这条指令` + usage |
 
 
-Match order: ops command (query/help) → enqueue (URLs or legacy JSON) → otherwise reject.
+Match order: ops (greet/query/help) → enqueue (URLs or legacy JSON) → otherwise reject.
 
 ---
 
@@ -174,7 +175,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
-| Lifecycle | Online / offline messages to announce chat; core fault/recover is edge-only (no spam) |
+| Lifecycle | Online message includes usage; offline to announce chat; core fault/recover is edge-only (no spam) |
 | Core heartbeat | Module A writes `state/heartbeat` every 10s; IM marks stale after `CORE_HEARTBEAT_STALE_SEC` (default 45) |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
