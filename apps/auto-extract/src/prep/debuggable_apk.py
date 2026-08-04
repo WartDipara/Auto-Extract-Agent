@@ -2,8 +2,8 @@
 Debuggable APK prep (no apktool / no smali decode):
 
 1) Binary-patch AndroidManifest.xml to set android:debuggable=true
-2) zipalign + apksigner
-3) Zip-extract APK into decoded/ for the extract agent (resources only)
+2) Rewrite APK keeping other entries' compressed bytes as-is (drop META-INF)
+3) zipalign (skipped for huge/ZIP64 packs) + apksigner
 
 Manifest patcher adapted from julKali/makeDebuggable (with bugfix).
 """
@@ -11,6 +11,7 @@ Manifest patcher adapted from julKali/makeDebuggable (with bugfix).
 from __future__ import annotations
 
 import builtins
+import copy
 import io
 import logging
 import re
@@ -27,6 +28,9 @@ from prep.workspace import rmtree_force
 _log = logging.getLogger(__name__)
 
 _PKG_BADGING_RE = re.compile(r"package: name='([^']+)'")
+# Classic ZIP / zipalign often break past 2GiB (ZIP64). Skip align for huge APKs.
+_ZIPALIGN_MAX_BYTES = 2 * 1024 * 1024 * 1024
+_ZIP64_THRESH = 0xFFFFFFFF
 
 _vendor = Path(__file__).resolve().parent / "_vendor"
 if str(_vendor) not in sys.path:
@@ -106,8 +110,8 @@ def _patch_manifest_bytes(raw: bytes) -> bytes:
 
 def make_debuggable_signed_apk(src_apk: Path, out_apk: Path) -> Path:
     """
-    Copy APK, binary-patch AndroidManifest debuggable=true, drop META-INF,
-    zipalign, and sign with debug keystore.
+    Patch AndroidManifest debuggable=true, drop META-INF, keep other zip
+    entries' compressed bytes unchanged, then zipalign (when safe) + sign.
     """
     src_apk = Path(src_apk)
     out_apk = Path(out_apk)
@@ -129,24 +133,98 @@ def make_debuggable_signed_apk(src_apk: Path, out_apk: Path) -> Path:
             len(manifest_raw),
             len(patched_manifest),
         )
+        entries = [
+            info
+            for info in zin.infolist()
+            if info.filename != "AndroidManifest.xml"
+            and not info.filename.startswith("META-INF/")
+            and not info.filename.endswith("/")
+        ]
 
-        with zipfile.ZipFile(unsigned, "w") as zout:
-            man_info = zipfile.ZipInfo(filename="AndroidManifest.xml")
-            man_info.compress_type = zipfile.ZIP_DEFLATED
-            zout.writestr(man_info, patched_manifest)
-            for info in zin.infolist():
-                name = info.filename
-                if name == "AndroidManifest.xml" or name.startswith("META-INF/"):
-                    continue
-                if name.endswith("/"):
-                    continue
-                data = zin.read(name)
-                out_info = zipfile.ZipInfo(filename=name, date_time=info.date_time)
-                out_info.compress_type = info.compress_type
-                out_info.external_attr = info.external_attr
-                zout.writestr(out_info, data)
-
+    _rewrite_apk_keep_compressed(
+        src_apk,
+        unsigned,
+        entries=entries,
+        manifest_bytes=patched_manifest,
+    )
+    _log.info("rewrote apk (raw entry copy, META-INF stripped): %s", unsigned)
     return _align_and_sign(unsigned, out_apk)
+
+
+def _read_compressed_payload(apk: Path, info: zipfile.ZipInfo) -> bytes:
+    """Read one entry's on-disk compressed payload (no decompress)."""
+    with apk.open("rb") as f:
+        f.seek(info.header_offset)
+        local = f.read(30)
+        if local[:4] != b"PK\x03\x04":
+            raise RuntimeError(f"bad zip local header: {info.filename}")
+        fname_len = int.from_bytes(local[26:28], "little")
+        extra_len = int.from_bytes(local[28:30], "little")
+        f.read(fname_len + extra_len)
+        payload = f.read(info.compress_size)
+    if len(payload) != info.compress_size:
+        raise RuntimeError(
+            f"truncated zip payload for {info.filename}: "
+            f"{len(payload)} != {info.compress_size}"
+        )
+    return payload
+
+
+def _strip_zip64_extra(extra: bytes) -> bytes:
+    """Drop ZIP64 extra fields so FileHeader can rewrite them cleanly."""
+    out = bytearray()
+    i = 0
+    while i + 4 <= len(extra):
+        header_id = int.from_bytes(extra[i : i + 2], "little")
+        data_size = int.from_bytes(extra[i + 2 : i + 4], "little")
+        end = i + 4 + data_size
+        if end > len(extra):
+            break
+        if header_id != 0x0001:
+            out.extend(extra[i:end])
+        i = end
+    return bytes(out)
+
+
+def _write_precompressed(
+    zf: zipfile.ZipFile, info: zipfile.ZipInfo, compressed: bytes
+) -> None:
+    """Append an entry using already-compressed bytes (stdlib has no public API)."""
+    zinfo = copy.copy(info)
+    zinfo.compress_size = len(compressed)
+    zinfo.extra = _strip_zip64_extra(zinfo.extra)
+    # Size known; don't use data-descriptor streaming form.
+    zinfo.flag_bits &= ~0x08
+    zf._writecheck(zinfo)
+    zf._didModify = True
+    fp = zf.fp
+    assert fp is not None
+    zinfo.header_offset = fp.tell()
+    zip64 = zinfo.file_size > _ZIP64_THRESH or zinfo.compress_size > _ZIP64_THRESH
+    if zip64 and not zf._allowZip64:
+        raise RuntimeError(f"zip64 required for entry: {zinfo.filename}")
+    fp.write(zinfo.FileHeader(zip64))
+    fp.write(compressed)
+    zf.filelist.append(zinfo)
+    zf.NameToInfo[zinfo.filename] = zinfo
+    zf.start_dir = fp.tell()
+
+
+def _rewrite_apk_keep_compressed(
+    src_apk: Path,
+    dst_apk: Path,
+    *,
+    entries: list[zipfile.ZipInfo],
+    manifest_bytes: bytes,
+) -> None:
+    """Build dst APK: patched manifest + raw-copied entries (no META-INF)."""
+    with zipfile.ZipFile(dst_apk, "w", allowZip64=True) as zout:
+        man_info = zipfile.ZipInfo(filename="AndroidManifest.xml")
+        man_info.compress_type = zipfile.ZIP_DEFLATED
+        zout.writestr(man_info, manifest_bytes)
+        for info in entries:
+            payload = _read_compressed_payload(src_apk, info)
+            _write_precompressed(zout, info, payload)
 
 
 def _align_and_sign(unsigned: Path, out_apk: Path) -> Path:
@@ -155,9 +233,25 @@ def _align_and_sign(unsigned: Path, out_apk: Path) -> Path:
     aligned = out_apk.with_suffix(".aligned.apk")
     src = unsigned
     zipalign = _find_zipalign()
-    if zipalign:
-        _run([zipalign, "-f", "4", str(unsigned), str(aligned)], timeout=120)
-        src = aligned
+    size = unsigned.stat().st_size if unsigned.is_file() else 0
+    if zipalign and size >= _ZIPALIGN_MAX_BYTES:
+        _log.warning(
+            "skip zipalign for large apk (%s bytes >= %s); signing without align",
+            size,
+            _ZIPALIGN_MAX_BYTES,
+        )
+    elif zipalign:
+        try:
+            _run([zipalign, "-f", "4", str(unsigned), str(aligned)], timeout=120)
+            src = aligned
+        except RuntimeError as exc:
+            # Large/ZIP64 packs often fail with "Unable to open ... as zip archive".
+            msg = str(exc).lower()
+            if "as zip archive" in msg or size >= _ZIPALIGN_MAX_BYTES // 2:
+                _log.warning("zipalign failed; signing without align: %s", exc)
+                src = unsigned
+            else:
+                raise
 
     if apksigner_cmd:
         _run(
