@@ -1,4 +1,4 @@
-"""Process helpers shared by Module A and B (no app imports)."""
+"""Process helpers for Module A (no app imports)."""
 
 from __future__ import annotations
 

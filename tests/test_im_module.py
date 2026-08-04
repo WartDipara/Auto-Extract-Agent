@@ -102,6 +102,9 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
         def start(self, on_message):
             pass
 
+        def stop(self):
+            pass
+
         def reply_text(self, chat_id, text):
             self.texts.append(text)
 
@@ -314,6 +317,9 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
             self.texts: list[tuple[str, str]] = []
 
         def start(self, on_message):
+            pass
+
+        def stop(self):
             pass
 
         def reply_text(self, chat_id, text):

@@ -110,6 +110,9 @@ class FeishuChannel:
         _log.info("feishu websocket starting")
         cli.start()
 
+    def stop(self) -> None:
+        return
+
     def _dispatch(self, data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         try:
             event = data.event

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import threading
 from collections import deque
 from pathlib import Path
 from time import monotonic
@@ -98,9 +100,14 @@ class DingTalkChannel:
         self._api = DingTalkOpenApi(client_id, client_secret, self._robot_code)
         self._on_message: MessageHandler | None = None
         self._seen = _SeenIds()
+        self._stop = threading.Event()
+
+    def stop(self) -> None:
+        self._stop.set()
 
     def start(self, on_message: MessageHandler) -> None:
         self._on_message = on_message
+        self._stop.clear()
         credential = Credential(self._client_id, self._client_secret)
         client = DingTalkStreamClient(credential)
         client.register_callback_handler(
@@ -113,10 +120,19 @@ class DingTalkChannel:
             self._robot_code,
             ChatbotMessage.TOPIC,
         )
-        try:
-            client.start_forever()
-        except (SystemExit, KeyboardInterrupt):
-            _log.info("dingtalk stream stopped")
+        # Avoid SDK start_forever(): only breaks on KeyboardInterrupt and always
+        # sleeps/reconnects, so SystemExit / blips look like a hang.
+        while not self._stop.is_set():
+            try:
+                asyncio.run(client.start())
+            except KeyboardInterrupt:
+                break
+            if self._stop.is_set():
+                break
+            _log.warning("dingtalk stream disconnected; retry in 3s")
+            if self._stop.wait(3.0):
+                break
+        _log.info("dingtalk stream stopped")
 
     def handle_incoming(self, msg: ChatbotMessage) -> None:
         if self._seen.is_duplicate(msg.message_id):

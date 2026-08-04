@@ -47,11 +47,19 @@ class Courier:
         self._register_lifecycle_hooks()
         threading.Thread(target=self._poll_loop, name="im-poll", daemon=True).start()
         self._announce(config.MSG_BOT_ONLINE)
-        self._channel.start(self.on_message)
+        try:
+            self._channel.start(self.on_message)
+        except KeyboardInterrupt:
+            _log.info("im-module stopped")
+        finally:
+            self.stop()
 
     def stop(self) -> None:
         self._announce_offline_once()
         self._stop.set()
+        stopper = getattr(self._channel, "stop", None)
+        if callable(stopper):
+            stopper()
 
     def _register_lifecycle_hooks(self) -> None:
         if self._hooks_registered:
@@ -66,7 +74,8 @@ class Courier:
         def _on_signal(signum, _frame) -> None:
             _log.info("signal %s received, shutting down", signum)
             self.stop()
-            raise SystemExit(0)
+            # DingTalk SDK stream loops break on KeyboardInterrupt only.
+            raise KeyboardInterrupt
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -109,7 +118,7 @@ class Courier:
             return
         payload = parse_task_message(text)
         if payload is None:
-            self._channel.reply_text(chat_id, f"unknown command.\n{config.OPS_TEMPLATE}")
+            self._channel.reply_text(chat_id, f"没看懂这条指令。\n{config.OPS_TEMPLATE}")
             return
         self._enqueue_urls(chat_id, payload["get-texts"]["urls"])
 
