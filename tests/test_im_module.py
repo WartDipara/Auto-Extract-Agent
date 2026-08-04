@@ -338,16 +338,20 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
 
     # No heartbeat → one fault
     c._check_core_health()
-    assert ch.texts == [("group:cid-test", config.MSG_CORE_DOWN)]
+    assert len(ch.texts) == 1 and ch.texts[0][0] == "group:cid-test"
+    assert ch.texts[0][1] in config.MSG_CORE_DOWN_VARIANTS
+    fault_msg = ch.texts[0][1]
     c._check_core_health()
-    assert ch.texts == [("group:cid-test", config.MSG_CORE_DOWN)]
+    assert ch.texts == [("group:cid-test", fault_msg)]
 
     # Fresh heartbeat → one recover
     hb.write_text("ok\n", encoding="utf-8")
     c._check_core_health()
-    assert ch.texts[-1] == ("group:cid-test", config.MSG_CORE_UP)
+    assert ch.texts[-1][0] == "group:cid-test"
+    assert ch.texts[-1][1] in config.MSG_CORE_UP_VARIANTS
+    up_msg = ch.texts[-1][1]
     c._check_core_health()
-    assert len([t for t in ch.texts if t[1] == config.MSG_CORE_UP]) == 1
+    assert len([t for t in ch.texts if t[1] == up_msg]) == 1
 
     # Empty announce chat → skip without crash
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
@@ -362,4 +366,5 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     c.on_message("group:cid-learned", "help")
     c._core_fault_announced = False
     c._check_core_health()
-    assert ch.texts[-1] == ("group:cid-learned", config.MSG_CORE_DOWN)
+    assert ch.texts[-1][0] == "group:cid-learned"
+    assert ch.texts[-1][1] in config.MSG_CORE_DOWN_VARIANTS

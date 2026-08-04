@@ -105,7 +105,7 @@ class Courier:
     def _announce_online(self) -> None:
         if self._online_announced:
             return
-        text = f"{config.MSG_BOT_ONLINE}\n\n{config.OPS_TEMPLATE}"
+        text = f"{config.pick_bot_online()}\n\n{config.OPS_TEMPLATE}"
         if self._announce(text):
             self._online_announced = True
 
@@ -121,20 +121,22 @@ class Courier:
         if self._offline_announced:
             return
         self._offline_announced = True
-        self._announce(config.MSG_BOT_OFFLINE)
+        self._announce(config.pick_bot_offline())
 
     def on_message(self, chat_id: str, text: str) -> None:
         self._remember_chat(chat_id)
         cmd = parse_ops_command(text)
         if cmd is not None:
             if cmd.kind == "greet":
-                self._channel.reply_text(chat_id, config.MSG_GREET)
+                self._channel.reply_text(chat_id, config.pick_greet())
                 return
             self._handle_ops(chat_id, cmd)
             return
         payload = parse_task_message(text)
         if payload is None:
-            self._channel.reply_text(chat_id, f"Lino没看懂这条指令。\n{config.OPS_TEMPLATE}")
+            self._channel.reply_text(
+                chat_id, f"{config.BOT_NAME}没看懂这条指令。\n{config.OPS_TEMPLATE}"
+            )
             return
         self._enqueue_urls(chat_id, payload["get-texts"]["urls"])
 
@@ -194,10 +196,10 @@ class Courier:
     def _check_core_health(self) -> None:
         healthy = self._core_is_healthy()
         if not healthy and not self._core_fault_announced:
-            self._announce(config.MSG_CORE_DOWN)
+            self._announce(config.pick_core_down())
             self._core_fault_announced = True
         elif healthy and self._core_fault_announced:
-            self._announce(config.MSG_CORE_UP)
+            self._announce(config.pick_core_up())
             self._core_fault_announced = False
 
     def _tick(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import random
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -58,12 +59,37 @@ CORE_HEARTBEAT_STALE_SEC = float(
     os.environ.get("CORE_HEARTBEAT_STALE_SEC", "45") or "45"
 )
 
-MSG_BOT_ONLINE = "Lino已就位，可以开始工作了"
-MSG_BOT_OFFLINE = "Lino目前有急事，先走开了"
-MSG_CORE_DOWN = "出故障了：（ 等我去修修"
-MSG_CORE_UP = "搞定了，又可以正常工作了"
-
 BOT_NAME = "Lino"
+
+MSG_BOT_ONLINE_VARIANTS = (
+    f"{BOT_NAME}已就位，可以开始工作了",
+    f"{BOT_NAME}准备好了～随时接消息",
+    f"报到！{BOT_NAME}在线，把链接丢过来就行",
+    f"{BOT_NAME}上线了，有需要直接喊{BOT_NAME}",
+    f"嗯，{BOT_NAME}来了。已就位！",
+)
+MSG_BOT_OFFLINE_VARIANTS = (
+    f"{BOT_NAME}目前有急事，先去休息了",
+    f"{BOT_NAME}去歇会儿，稍后再来～",
+    f"先休息啦，有事稍后找{BOT_NAME}",
+    f"{BOT_NAME}去休息了，下次再一起合作",
+    f"{BOT_NAME}家里的金鱼溺水了，先去救鱼了",
+)
+MSG_CORE_DOWN_VARIANTS = (
+    f"出故障了：（ 等{BOT_NAME}去修修",
+    f"后台卡住了，{BOT_NAME}去敲两下再来",
+    f"哎呀服务罢工了，稍等{BOT_NAME}抢修",
+    f"报错了，先别催单，{BOT_NAME}去处理",
+    "出了点状况……修完马上回来",
+)
+MSG_CORE_UP_VARIANTS = (
+    "搞定了，又可以正常工作了",
+    "修好啦，可以继续干活了",
+    "恢复正常，可以继续了",
+    "抢修完成，继续开工！",
+    "活过来了～服务已恢复",
+)
+
 OPS_TEMPLATE = (
     "用法：\n"
     "【提交任务】直接填入APK的下载链接，可多条\n"
@@ -80,11 +106,58 @@ OPS_TEMPLATE = (
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi"
 )
-MSG_GREET = (
-    f"你好，我是{BOT_NAME}～\n"
-    "我负责指挥流程！你把下载链接发给我"
-    "我会安排专人帮你解决问题的"
-    "完成后把结果发回给你。\n"
-    "\n"
-    f"{OPS_TEMPLATE}"
+
+_MSG_GREET_BODIES = (
+    (
+        f"你好，我是{BOT_NAME}～\n"
+        f"{BOT_NAME}负责传话：你把 APK 下载链接发给{BOT_NAME}，"
+        f"{BOT_NAME}会转给专人帮你解决，完成后把结果发回给你。"
+    ),
+    (
+        f"嗨，我是{BOT_NAME}。\n"
+        f"{BOT_NAME}负责传信的：你给{BOT_NAME}链接，{BOT_NAME}帮忙登记排队，"
+        "有结果了再送回群里。"
+    ),
+    (
+        f"你好呀，{BOT_NAME}在此～\n"
+        f"别跟{BOT_NAME}聊太复杂的，发下载链接就对了；"
+        f"中间怎么处理不用操心，有消息{BOT_NAME}会告诉你。"
+    ),
+    (
+        f"Hello，我是{BOT_NAME}！\n"
+        f"你负责丢链接，{BOT_NAME}负责传话和回传结果。"
+    ),
+    (
+        f"在的，我是{BOT_NAME}。\n"
+        f"把下载地址发给{BOT_NAME}，"
+        f"办完后{BOT_NAME}会把结果回传给你。"
+    ),
 )
+
+
+def pick_bot_online() -> str:
+    return random.choice(MSG_BOT_ONLINE_VARIANTS)
+
+
+def pick_bot_offline() -> str:
+    return random.choice(MSG_BOT_OFFLINE_VARIANTS)
+
+
+def pick_core_down() -> str:
+    return random.choice(MSG_CORE_DOWN_VARIANTS)
+
+
+def pick_core_up() -> str:
+    return random.choice(MSG_CORE_UP_VARIANTS)
+
+
+def pick_greet() -> str:
+    return f"{random.choice(_MSG_GREET_BODIES)}\n\n{OPS_TEMPLATE}"
+
+
+# Backward-compatible aliases (first variant / composed greet).
+MSG_BOT_ONLINE = MSG_BOT_ONLINE_VARIANTS[0]
+MSG_BOT_OFFLINE = MSG_BOT_OFFLINE_VARIANTS[0]
+MSG_CORE_DOWN = MSG_CORE_DOWN_VARIANTS[0]
+MSG_CORE_UP = MSG_CORE_UP_VARIANTS[0]
+MSG_GREET = f"{_MSG_GREET_BODIES[0]}\n\n{OPS_TEMPLATE}"
