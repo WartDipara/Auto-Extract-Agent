@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from errors.model import ErrorInfo
+from opencode_session import OpenCodeStopped
 
 
 class OpenCodeStoppedMapper:
     name = "opencode_stopped"
 
     def match(self, exc: BaseException) -> bool:
-        try:
-            from opencode_session import OpenCodeStopped
-        except ImportError:
-            return False
         return isinstance(exc, OpenCodeStopped)
 
     def map(self, exc: BaseException, *, stage: str) -> ErrorInfo:

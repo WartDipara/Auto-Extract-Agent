@@ -6,7 +6,7 @@ import signal
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import config
@@ -19,30 +19,25 @@ from task_ledger_query import run_ledger_query
 
 _log = logging.getLogger(__name__)
 
-
-@dataclass
-class PendingJob:
-    request_id: str
-    chat_id: str
-    source_file: str
-    expected: int
-    delivered_ids: set[str] = field(default_factory=set)
-
-    @property
-    def finished(self) -> bool:
-        return len(self.delivered_ids) >= self.expected
+_TERMINAL = (
+    "success",
+    "decrypt_failed",
+    "assets_missing",
+    "abnormal_exit",
+    "failed",
+    "timeout",
+)
 
 
 class Courier:
     def __init__(self, channel: Channel):
         self._channel = channel
-        self._jobs: dict[str, PendingJob] = {}
-        self._lock = threading.Lock()
         self._stop = threading.Event()
         self._online_announced = False
         self._offline_announced = False
         self._core_fault_announced = False
         self._hooks_registered = False
+        self._missing_chat_warned: set[str] = set()
 
     def start(self) -> None:
         self._register_lifecycle_hooks()
@@ -113,7 +108,6 @@ class Courier:
         if (config.ANNOUNCE_CHAT_ID or "").strip():
             return
         changed = save_learned_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
-        # First learned chat after cold start: send online + usage once.
         if changed and not self._online_announced:
             self._announce_online()
 
@@ -158,17 +152,14 @@ class Courier:
     def _enqueue_urls(
         self, chat_id: str, urls: list[str], *, ack: bool = True
     ) -> Path:
-        payload = {"get-texts": {"urls": list(urls)}}
+        payload = {
+            "get-texts": {
+                "urls": list(urls),
+                "im_chat_id": chat_id,
+            }
+        }
         request_id = new_request_id()
         path = write_inbox_json(config.INBOX_DIR, payload, request_id=request_id)
-        job = PendingJob(
-            request_id=request_id,
-            chat_id=chat_id,
-            source_file=path.name,
-            expected=len(urls),
-        )
-        with self._lock:
-            self._jobs[request_id] = job
         if ack:
             self._channel.reply_text(
                 chat_id,
@@ -203,79 +194,110 @@ class Courier:
             self._core_fault_announced = False
 
     def _tick(self) -> None:
-        with self._lock:
-            jobs = [j for j in self._jobs.values() if not j.finished]
-        for job in jobs:
-            for done in _list_undelivered(job.source_file):
-                task_id = str(done.get("task_id") or "")
-                if not task_id or task_id in job.delivered_ids:
-                    continue
-                if self._deliver_done(job, done):
-                    _mark_delivered(task_id)
-                    with self._lock:
-                        job.delivered_ids.add(task_id)
-                        if job.finished:
-                            _log.info(
-                                "job complete %s delivered=%s",
-                                job.source_file,
-                                len(job.delivered_ids),
-                            )
+        for done in _list_undelivered():
+            task_id = str(done.get("task_id") or "")
+            if not task_id:
+                continue
+            chat_id = _resolve_delivery_chat(done)
+            if not chat_id:
+                if task_id not in self._missing_chat_warned:
+                    self._missing_chat_warned.add(task_id)
+                    _log.warning(
+                        "skip deliver %s: no im_chat_id and no announce chat",
+                        task_id,
+                    )
+                continue
+            if self._deliver_done(chat_id, done):
+                _mark_delivered(task_id)
+                self._missing_chat_warned.discard(task_id)
 
-    def _deliver_done(self, job: PendingJob, done: dict) -> bool:
+    def _deliver_done(self, chat_id: str, done: dict) -> bool:
         st = str(done.get("status") or "")
         task_id = str(done.get("task_id") or "")
         label = str(done.get("label") or done.get("filename") or task_id)
         if st == "success":
             zip_path = Path(str(done.get("buf_done_zip") or ""))
             if not zip_path.is_file():
-                age = time.time() - int(job.request_id.split("_")[0])
-                if age < config.ZIP_WAIT_SEC:
+                if _age_since_finish_sec(done) < config.ZIP_WAIT_SEC:
                     return False
                 self._channel.reply_text(
-                    job.chat_id,
+                    chat_id,
                     f"任务成功但结果文件超时未出现：{label} ({zip_path.name or '-'})",
                 )
                 return True
             try:
-                self._channel.send_file(job.chat_id, zip_path)
+                self._channel.send_file(chat_id, zip_path)
                 self._channel.reply_text(
-                    job.chat_id, f"结果已发送：{zip_path.name} ({label})"
+                    chat_id, f"结果已发送：{zip_path.name} ({label})"
                 )
             except Exception as exc:
                 self._channel.reply_text(
-                    job.chat_id, f"发送结果失败：{label}\n{exc}"
+                    chat_id, f"发送结果失败：{label}\n{exc}"
                 )
             return True
         err = done.get("error") or st
-        self._channel.reply_text(job.chat_id, f"任务结束：{label}\n{st}\n{err}")
+        self._channel.reply_text(chat_id, f"任务结束：{label}\n{st}\n{err}")
         return True
 
 
-def _list_undelivered(source_file: str) -> list[dict]:
+def _resolve_delivery_chat(done: dict) -> str:
+    chat = str(done.get("im_chat_id") or "").strip()
+    if chat:
+        return chat
+    return resolve_announce_chat(
+        pinned=config.ANNOUNCE_CHAT_ID,
+        state_path=Path(config.ANNOUNCE_CHAT_STATE),
+    )
+
+
+def _age_since_finish_sec(done: dict) -> float:
+    raw = str(done.get("finished_at") or done.get("updated_at") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, time.time() - parsed.timestamp())
+    except ValueError:
+        return 0.0
+
+
+def _list_undelivered() -> list[dict]:
     db = Path(config.TASKS_DB)
     if not db.is_file():
         return []
-    name = Path(source_file).name
     uri = f"file:{db.resolve().as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            """
+        placeholders = ",".join("?" * len(_TERMINAL))
+        sql = f"""
             SELECT task_id, status, label, filename, error, result_csv,
-                   buf_done_zip, finished_at
+                   buf_done_zip, finished_at, updated_at, source_file
+                   {{extra}}
             FROM tasks
-            WHERE source_file=?
-              AND status IN (
-                'success','decrypt_failed','assets_missing',
-                'abnormal_exit','failed','timeout'
-              )
+            WHERE status IN ({placeholders})
               AND (im_delivered_at IS NULL OR im_delivered_at='')
             ORDER BY finished_at ASC, updated_at ASC
-            """,
-            (name,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+            """
+        try:
+            rows = conn.execute(
+                sql.format(extra=", im_chat_id"),
+                _TERMINAL,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute(
+                sql.format(extra=""),
+                _TERMINAL,
+            ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            item = dict(row)
+            item.setdefault("im_chat_id", "")
+            out.append(item)
+        return out
     finally:
         conn.close()
 

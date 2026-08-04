@@ -25,6 +25,7 @@ _EXPORT_COLS = (
     "error",
     "url",
     "filename",
+    "im_chat_id",
     "updated_at",
     "finished_at",
 )

@@ -24,9 +24,21 @@ def _db_path() -> Path:
 def open_store() -> None:
     global _conn
     with _lock:
+        path = _db_path().resolve()
         if _conn is not None:
-            return
-        path = _db_path()
+            try:
+                row = _conn.execute("PRAGMA database_list").fetchone()
+                current = Path(str(row[2] or "")).resolve() if row else Path()
+            except Exception:
+                current = Path()
+            if current == path:
+                _ensure_columns(_conn)
+                return
+            try:
+                _conn.close()
+            except Exception:
+                pass
+            _conn = None
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), check_same_thread=False, timeout=30.0)
         conn.row_factory = sqlite3.Row
@@ -52,21 +64,33 @@ def open_store() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 finished_at TEXT NOT NULL DEFAULT '',
-                im_delivered_at TEXT NOT NULL DEFAULT ''
+                im_delivered_at TEXT NOT NULL DEFAULT '',
+                im_chat_id TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at);
             CREATE INDEX IF NOT EXISTS idx_tasks_url ON tasks(url);
             CREATE INDEX IF NOT EXISTS idx_tasks_source_status ON tasks(source_file, status);
+            CREATE INDEX IF NOT EXISTS idx_tasks_undelivered
+                ON tasks(im_delivered_at, status);
             CREATE TABLE IF NOT EXISTS meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
             """
         )
+        _ensure_columns(conn)
         conn.commit()
         _conn = conn
         _log.info("task_store open %s", path)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    if "im_chat_id" not in cols:
+        conn.execute(
+            "ALTER TABLE tasks ADD COLUMN im_chat_id TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _require_conn() -> sqlite3.Connection:
@@ -102,7 +126,15 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         updated_at=row["updated_at"] or "",
         finished_at=row["finished_at"] or "",
         im_delivered_at=row["im_delivered_at"] or "",
+        im_chat_id=_row_get(row, "im_chat_id"),
     )
+
+
+def _row_get(row: sqlite3.Row, key: str) -> str:
+    try:
+        return row[key] or ""
+    except (KeyError, IndexError):
+        return ""
 
 
 def get_next_seq() -> int:
@@ -144,8 +176,8 @@ def insert_task(task: Task) -> Task:
                 INSERT INTO tasks (
                     task_id, url, source_file, filename, label, labels_json,
                     status, error, result_csv, session_id, buf_done_zip, adb_serial,
-                    created_at, updated_at, finished_at, im_delivered_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, finished_at, im_delivered_at, im_chat_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -164,6 +196,7 @@ def insert_task(task: Task) -> Task:
                     task.updated_at,
                     task.finished_at or "",
                     task.im_delivered_at or "",
+                    task.im_chat_id or "",
                 ),
             )
             conn.commit()
@@ -188,6 +221,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
         "adb_serial",
         "finished_at",
         "im_delivered_at",
+        "im_chat_id",
     }
     patch = {k: v for k, v in fields.items() if k in allowed}
     if not patch:
@@ -218,7 +252,8 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                 UPDATE tasks SET
                     url=?, source_file=?, filename=?, label=?, labels_json=?,
                     status=?, error=?, result_csv=?, session_id=?, buf_done_zip=?,
-                    adb_serial=?, updated_at=?, finished_at=?, im_delivered_at=?
+                    adb_serial=?, updated_at=?, finished_at=?, im_delivered_at=?,
+                    im_chat_id=?
                 WHERE task_id=?
                 """,
                 (
@@ -236,6 +271,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     task.updated_at,
                     task.finished_at or "",
                     task.im_delivered_at or "",
+                    task.im_chat_id or "",
                     task.task_id,
                 ),
             )

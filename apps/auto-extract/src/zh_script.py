@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import hanzidentifier as hz
+from hanzidentifier import helpers
+
 
 @dataclass(frozen=True)
 class ScriptSplit:
@@ -18,9 +21,6 @@ class ScriptSplit:
 
 def route_bucket(text: str) -> str:
     """Return 's' or 't' for one line. Every line must go to exactly one side."""
-    import hanzidentifier as hz
-    from hanzidentifier import helpers
-
     kind = hz.identify(text)
     if kind is hz.TRADITIONAL:
         return "t"

@@ -72,8 +72,8 @@ MSG_BOT_OFFLINE_VARIANTS = (
     f"{BOT_NAME}目前有急事，先去休息了",
     f"{BOT_NAME}去歇会儿，稍后再来～",
     f"先休息啦，有事稍后找{BOT_NAME}",
-    f"{BOT_NAME}去休息了，下次再一起合作",
-    f"{BOT_NAME}家里的金鱼溺水了，先去救鱼了",
+    f"{BOT_NAME}先去休息了，下次再一起合作",
+    f"{BOT_NAME}家里的金鱼溺水了，先离开一下",
 )
 MSG_CORE_DOWN_VARIANTS = (
     f"出故障了：（ 等{BOT_NAME}去修修",

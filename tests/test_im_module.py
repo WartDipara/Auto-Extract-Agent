@@ -80,7 +80,7 @@ def test_write_inbox_json(tmp_path):
 
 
 def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
-    """One inbox with N urls must reply as each task finishes, not only the last."""
+    """Undelivered terminal tasks are delivered from DB even after IM restart."""
     for p in (str(_IM_SRC),):
         if p in sys.path:
             sys.path.remove(p)
@@ -96,8 +96,8 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
 
     class _FakeChannel:
         def __init__(self):
-            self.texts: list[str] = []
-            self.files: list[str] = []
+            self.texts: list[tuple[str, str]] = []
+            self.files: list[tuple[str, str]] = []
 
         def start(self, on_message):
             pass
@@ -106,10 +106,10 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
             pass
 
         def reply_text(self, chat_id, text):
-            self.texts.append(text)
+            self.texts.append((chat_id, text))
 
         def send_file(self, chat_id, path):
-            self.files.append(Path(path).name)
+            self.files.append((chat_id, Path(path).name))
 
     buf = tmp_path / "buf_done"
     buf.mkdir()
@@ -118,6 +118,8 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     db = tmp_path / "tasks.db"
     monkeypatch.setattr(config, "TASKS_DB", db)
     monkeypatch.setattr(config, "ZIP_WAIT_SEC", 600)
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", tmp_path / "announce.json")
 
     def _seed(rows: list[tuple]):
         conn = sqlite3.connect(str(db))
@@ -128,28 +130,30 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 url TEXT, label TEXT, filename TEXT, status TEXT, error TEXT,
                 result_csv TEXT, session_id TEXT, buf_done_zip TEXT, source_file TEXT,
                 adb_serial TEXT, created_at TEXT, updated_at TEXT, finished_at TEXT,
-                im_delivered_at TEXT
+                im_delivered_at TEXT, im_chat_id TEXT
             )
             """
         )
         conn.execute("DELETE FROM tasks")
         for row in rows:
             conn.execute(
-                "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 row,
             )
         conn.commit()
         conn.close()
 
+    def _delivered(task_id: str) -> str:
+        conn = sqlite3.connect(str(db))
+        row = conn.execute(
+            "SELECT im_delivered_at FROM tasks WHERE task_id=?", (task_id,)
+        ).fetchone()
+        conn.close()
+        return (row[0] if row else "") or ""
+
+    chat = "group:cid-x"
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
-    job = courier_mod.PendingJob(
-        request_id="1000_1",
-        chat_id="oc_x",
-        source_file="im_1000_1.json",
-        expected=2,
-    )
-    c._jobs[job.request_id] = job
 
     _seed(
         [
@@ -167,17 +171,20 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "t0",
                 "t1",
-                "t1",
+                "2026-01-01T00:00:00Z",
                 "",
+                chat,
             )
         ]
     )
     c._tick()
-    assert job.delivered_ids == {"t-1"}
-    assert not job.finished
-    assert ch.files == ["a.bin"]
-    assert any("a.bin" in t for t in ch.texts)
+    assert _delivered("t-1")
+    assert ch.files == [(chat, "a.bin")]
+    assert any(chat == cid and "a.bin" in text for cid, text in ch.texts)
 
+    # Simulate IM restart: new Courier, no memory; second task still undelivered.
+    ch2 = _FakeChannel()
+    c2 = courier_mod.Courier(ch2)
     _seed(
         [
             (
@@ -194,8 +201,9 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "t0",
                 "t1",
-                "t1",
+                "2026-01-01T00:00:00Z",
                 "delivered",
+                chat,
             ),
             (
                 "t-2",
@@ -211,18 +219,50 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "t0",
                 "t2",
-                "t2",
+                "2026-01-01T00:00:01Z",
                 "",
+                chat,
             ),
         ]
     )
-    c._tick()
-    assert job.delivered_ids == {"t-1", "t-2"}
-    assert job.finished
-    assert ch.files == ["a.bin", "b.bin"]
+    c2._tick()
+    assert _delivered("t-2")
+    assert ch2.files == [(chat, "b.bin")]
+    c2._tick()
+    assert ch2.files == [(chat, "b.bin")]
 
-    c._tick()
-    assert ch.files == ["a.bin", "b.bin"]
+
+def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "inbox_writer"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+
+    class _FakeChannel:
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text):
+            pass
+
+        def send_file(self, chat_id, path):
+            pass
+
+    inbox = tmp_path / "inbox"
+    monkeypatch.setattr(config, "INBOX_DIR", inbox)
+    c = courier_mod.Courier(_FakeChannel())
+    path = c._enqueue_urls("group:cid-z", ["https://a.apk", "https://b.apk"], ack=False)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["get-texts"]["im_chat_id"] == "group:cid-z"
+    assert data["get-texts"]["urls"] == ["https://a.apk", "https://b.apk"]
 
 
 def test_create_channel_routes(monkeypatch):

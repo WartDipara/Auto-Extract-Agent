@@ -15,6 +15,14 @@ for p in (_A_SRC, _A_APP, _IM_SRC, _ROOT):
 
 
 def test_task_store_persist_and_update(tmp_path, monkeypatch):
+    for p in list(sys.path):
+        if "im-module" in p.replace("\\", "/"):
+            sys.path.remove(p)
+    if str(_A_SRC) not in sys.path:
+        sys.path.insert(0, str(_A_SRC))
+    for name in ("config", "task_store", "models"):
+        sys.modules.pop(name, None)
+
     import config
     import task_store
 
@@ -25,14 +33,21 @@ def test_task_store_persist_and_update(tmp_path, monkeypatch):
 
     from models import Task
 
-    t = Task(task_id="t-0001", url="https://x/a.apk", source_file="im_1.json")
+    t = Task(
+        task_id="t-0001",
+        url="https://x/a.apk",
+        source_file="im_1.json",
+        im_chat_id="group:cid-a",
+    )
     task_store.insert_task(t)
     got = task_store.get_task("t-0001")
     assert got is not None and got.status == "queued"
+    assert got.im_chat_id == "group:cid-a"
 
     updated = task_store.update_task("t-0001", status="downloaded", filename="a.apk")
     assert updated is not None and updated.status == "downloaded"
     assert updated.filename == "a.apk"
+    assert updated.im_chat_id == "group:cid-a"
 
     again = task_store.get_task("t-0001")
     assert again is not None and again.status == "downloaded"
@@ -48,9 +63,17 @@ def test_recovery_matrix_routes(tmp_path, monkeypatch):
 
     import importlib
 
-    import config
+    for name in (
+        "config",
+        "task_store",
+        "queue_manager",
+        "pipeline",
+        "pipeline_queues",
+        "models",
+    ):
+        sys.modules.pop(name, None)
 
-    importlib.reload(config)
+    import config
     import pipeline
     import pipeline_queues as pq
     import task_store
@@ -190,12 +213,12 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             url TEXT, label TEXT, filename TEXT, status TEXT, error TEXT,
             result_csv TEXT, session_id TEXT, buf_done_zip TEXT, source_file TEXT,
             adb_serial TEXT, created_at TEXT, updated_at TEXT, finished_at TEXT,
-            im_delivered_at TEXT
+            im_delivered_at TEXT, im_chat_id TEXT
         )
         """
     )
     conn.execute(
-        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "t-0001",
             "https://x/a.apk",
@@ -212,10 +235,11 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "2026-08-04T12:01:00Z",
             "2026-08-04T12:01:00Z",
             "",
+            "group:cid-a",
         ),
     )
     conn.execute(
-        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "t-0002",
             "https://x/b.apk",
@@ -232,6 +256,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "2026-08-04T12:00:30Z",
             "",
             "",
+            "group:cid-a",
         ),
     )
     conn.commit()

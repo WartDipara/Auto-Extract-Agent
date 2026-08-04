@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 from prep.adb_device import AdbDevice
 
 _log = logging.getLogger(__name__)
@@ -23,8 +25,6 @@ class ScreenCoordSpace:
 
 
 def _read_image_size(path: Path) -> tuple[int, int]:
-    from PIL import Image
-
     with Image.open(path) as im:
         return int(im.size[0]), int(im.size[1])
 

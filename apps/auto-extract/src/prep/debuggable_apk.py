@@ -10,19 +10,28 @@ Manifest patcher adapted from julKali/makeDebuggable (with bugfix).
 
 from __future__ import annotations
 
+import builtins
 import io
 import logging
 import re
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 import config
+from androguard.core.apk import APK
+from prep.workspace import rmtree_force
 
 _log = logging.getLogger(__name__)
 
 _PKG_BADGING_RE = re.compile(r"package: name='([^']+)'")
+
+_vendor = Path(__file__).resolve().parent / "_vendor"
+if str(_vendor) not in sys.path:
+    sys.path.insert(0, str(_vendor))
+import makeDebuggable as md  # type: ignore
 
 
 def _resolve_cmd(exe: str) -> str:
@@ -67,15 +76,11 @@ def package_name_from_apk(apk_path: Path) -> str:
 
     # Quiet androguard (very noisy by default)
     logging.getLogger("androguard").setLevel(logging.WARNING)
-    from androguard.core.apk import APK
-
     return APK(str(apk_path)).get_package() or ""
 
 
 def extract_apk_zip(apk_path: Path, out_dir: Path) -> Path:
     """Extract APK as zip into decoded/ (no smali decompile)."""
-    from prep.workspace import rmtree_force
-
     out_dir.parent.mkdir(parents=True, exist_ok=True)
     rmtree_force(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -86,14 +91,6 @@ def extract_apk_zip(apk_path: Path, out_dir: Path) -> Path:
 
 
 def _patch_manifest_bytes(raw: bytes) -> bytes:
-    import builtins
-    import sys
-
-    vendor = Path(__file__).resolve().parent / "_vendor"
-    if str(vendor) not in sys.path:
-        sys.path.insert(0, str(vendor))
-    import makeDebuggable as md  # type: ignore
-
     out = io.BytesIO()
     real_print = builtins.print
     builtins.print = lambda *args, **kwargs: None

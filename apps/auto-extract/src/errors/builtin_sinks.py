@@ -1,4 +1,4 @@
-"""Register built-in sinks (order: stop marker → log → queue → meta)."""
+"""Built-in error sinks (order: stop marker → log → queue → meta)."""
 
 from errors.sinks import (
     LogSink,
@@ -8,7 +8,15 @@ from errors.sinks import (
     register_sink,
 )
 
-register_sink(StopMarkerSink())
-register_sink(LogSink())
-register_sink(QueueSink())
-register_sink(MetaSink())
+_registered = False
+
+
+def register_builtin_sinks() -> None:
+    global _registered
+    if _registered:
+        return
+    register_sink(StopMarkerSink())
+    register_sink(LogSink())
+    register_sink(QueueSink())
+    register_sink(MetaSink())
+    _registered = True

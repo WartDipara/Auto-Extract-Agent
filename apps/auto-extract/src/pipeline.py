@@ -24,6 +24,7 @@ from extract_bridge import (
     wait_for_csv,
 )
 from models import Task
+from opencode_session import OpenCodeSessionManager
 from prep import run_device_stage, run_patch_stage
 from prep.debuggable_apk import package_name_from_apk
 from resource_pools import AdbPool, OpenCodePool
@@ -283,8 +284,6 @@ def _archive_loop() -> None:
                 if not session_id:
                     session_id = read_session_id_from_log(filename)
                 if not session_id:
-                    from opencode_session import OpenCodeSessionManager
-
                     session_id = OpenCodeSessionManager().lookup_session_id(task_key)
                 archived = archive_csv(csv_path, task_key, label, body_text)
                 enqueue_buf_done(archived)

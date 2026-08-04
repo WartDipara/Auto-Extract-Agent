@@ -49,6 +49,7 @@ class Task:
     updated_at: str = ""
     finished_at: str = ""
     im_delivered_at: str = ""
+    im_chat_id: str = ""
 
 
 @dataclass

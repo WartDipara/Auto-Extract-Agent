@@ -6,6 +6,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+import uiautomator2 as u2
 from prep.adb_device import AdbDevice
 from prep.device_router import DefaultHandler
 from prep.ocr_util import find_tap_for_texts, ocr_image
@@ -67,8 +68,6 @@ class XiaomiHandler(DefaultHandler):
 
 def _monitor_loop(adb: AdbDevice, stop: threading.Event, shot_dir: Path):
     try:
-        import uiautomator2 as u2
-
         d = u2.connect(adb.serial) if adb.serial else u2.connect()
         use_u2 = True
     except Exception as exc:

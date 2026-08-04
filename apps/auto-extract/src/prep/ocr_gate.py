@@ -14,6 +14,8 @@ from prep.adb_device import AdbDevice
 from prep.foreground_watch import ForegroundWatch
 from prep.ocr_util import ocr_image, texts_joined
 from prep.screen_coord import resolve_screen_coord_space
+from small_agent import UiAgentSession, ping_model
+from small_agent.tools import FrameOutcome
 
 _log = logging.getLogger(__name__)
 
@@ -32,9 +34,6 @@ def wait_until_entry_screen(
     Navigate privacy/download via small_agent until login/start/server entry.
     Returns scene label, or crash / ai_unavailable. Raises TimeoutError on budget.
     """
-    from small_agent import UiAgentSession, ping_model
-    from small_agent.tools import FrameOutcome
-
     if not adb.is_package_running(package_name):
         time.sleep(2.0)
     if not adb.is_package_running(package_name):

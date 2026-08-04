@@ -181,6 +181,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |
 | Runtime | Module A and IM both required; IM alone cannot extract |
+| IM restart | Safe: `im_chat_id` is stored on each task; undelivered terminals are re-polled from `tasks.db` |
 
 
 Start IM:

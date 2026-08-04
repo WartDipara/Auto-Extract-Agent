@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import config
+from prep.device_router import dispatch
 
 if TYPE_CHECKING:
     from prep.device_router import DeviceHandler
@@ -85,8 +86,6 @@ class AdbDevice:
     @property
     def device_handler(self) -> DeviceHandler:
         if self._device_handler is None:
-            from prep.device_router import dispatch
-
             self._device_handler = dispatch(self)
             _log.info(
                 "device handler %s serial=%s",

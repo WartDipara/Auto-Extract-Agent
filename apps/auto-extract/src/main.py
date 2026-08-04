@@ -11,11 +11,14 @@ for _p in (_APP, _SRC, _REPO):
         sys.path.insert(0, str(_p))
 
 import config
-from config import assert_extract_agent_ready, ensure_dirs
 from buf_done import ensure_buf_done_worker
+from config import assert_extract_agent_ready, ensure_dirs
+from errors import setup_error_framework
 from handlers.get_texts import ensure_worker, handle_get_texts
 from inbox_watcher import scan_existing, start_watcher
+from opencode_session import interrupt_active_run
 import queue_manager
+from prep.device_handlers import register_device_handlers
 from router import register
 
 _log = logging.getLogger("auto_extract")
@@ -38,6 +41,8 @@ def _register_routes():
 
 def main():
     _setup_logging()
+    setup_error_framework()
+    register_device_handlers()
     assert_extract_agent_ready()
     ensure_dirs()
     _log_agent_paths()
@@ -54,8 +59,6 @@ def main():
     except KeyboardInterrupt:
         _log.info("shutting down")
         try:
-            from opencode_session import interrupt_active_run
-
             interrupt_active_run()
         except Exception as exc:
             _log.warning("interrupt_active_run failed: %s", exc)

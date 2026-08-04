@@ -6,12 +6,14 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
+import config
+import queue_manager
 from errors.model import ErrorInfo
+from shared.archive_contract import has_stop, mark_stop, read_meta, write_meta
 
 _log = logging.getLogger(__name__)
 
 _SINKS: list[ErrorSink] = []
-_sinks_loaded = False
 
 
 class ErrorSink(Protocol):
@@ -26,20 +28,11 @@ def register_sink(sink: ErrorSink) -> None:
 
 
 def emit(info: ErrorInfo, **ctx: Any) -> None:
-    _ensure_sinks()
     for sink in _SINKS:
         try:
             sink.emit(info, **ctx)
         except Exception:
             _log.exception("error sink failed: %s", sink.name)
-
-
-def _ensure_sinks() -> None:
-    global _sinks_loaded
-    if _sinks_loaded:
-        return
-    _sinks_loaded = True
-    from errors import builtin_sinks as _builtin_sinks  # noqa: F401
 
 
 class LogSink:
@@ -65,8 +58,6 @@ class QueueSink:
         task_id = getattr(task, "task_id", None) or ctx.get("task_id")
         if not task_id:
             return
-        import queue_manager
-
         queue_manager.update_task(
             task_id,
             status=info.status,
@@ -84,8 +75,6 @@ class MetaSink:
         root = Path(task_root)
         if not root.is_dir():
             return
-        from shared.archive_contract import read_meta, write_meta
-
         payload = read_meta(root) or {}
         task = ctx.get("task")
         if task is not None:
@@ -107,9 +96,6 @@ class StopMarkerSink:
     def emit(self, info: ErrorInfo, **ctx: Any) -> None:
         if info.code != "EXTRACT_STOPPED":
             return
-        import config
-        from shared.archive_contract import has_stop, mark_stop
-
         task = ctx.get("task")
         filename = getattr(task, "filename", "") or ""
         task_key = Path(filename).stem if filename else ""

@@ -1,12 +1,24 @@
 import datetime
 import logging
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import config
-from shared.archive_contract import sanitize_label_for_filename
+import prompts as prompt_store
+from apk_meta import primary_label, resolve_source_lang
+from csv_quality import check_csv_quality, match_terminal_status
+from opencode_session import (
+    OpenCodeSessionManager,
+    OpenCodeStopped,
+    export_session_json,
+    output_csv_has_content,
+)
+from shared.archive_contract import sanitize_label_for_filename, task_layout
+from shared.sensitive_words import filter_sensitive_file, scan_sensitive_hits
+from zh_script import join_csv_body, split_body_text
 
 _log = logging.getLogger(__name__)
 
@@ -23,8 +35,6 @@ def _require_task_root() -> Path:
 
 
 def opencode_output_csv() -> Path:
-    from shared.archive_contract import task_layout
-
     return task_layout(_require_task_root())["tests_csv"].resolve()
 
 
@@ -80,8 +90,6 @@ def _open_task_log(apk_name: str):
 
 
 def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
-    from shared.archive_contract import task_layout
-
     layout = task_layout(_require_task_root())
     layout["outputs"].mkdir(parents=True, exist_ok=True)
     csv_path = layout["tests_csv"]
@@ -95,8 +103,6 @@ def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
 
 
 def write_abnormal_exit_csv(apk_name: str, reason: str = "") -> Path:
-    from shared.archive_contract import task_layout
-
     layout = task_layout(_require_task_root())
     layout["outputs"].mkdir(parents=True, exist_ok=True)
     csv_path = layout["tests_csv"]
@@ -160,8 +166,6 @@ def _count_files(path: Path) -> int:
 
 
 def workspace_ready_snapshot(task_root: Path | None = None) -> dict:
-    from shared.archive_contract import task_layout
-
     root = Path(task_root) if task_root is not None else _require_task_root()
     layout = task_layout(root)
     return {
@@ -203,8 +207,6 @@ def _attach_source_lang(
     label: str = "",
 ) -> dict:
     """Copy snap and attach label/labels used by prompt language hint."""
-    from apk_meta import primary_label
-
     out = dict(snap)
     resolved_labels = labels if labels is not None else out.get("labels") or {}
     resolved_label = (label or out.get("label") or primary_label(resolved_labels) or "").strip()
@@ -214,9 +216,6 @@ def _attach_source_lang(
 
 
 def _render_source_lang_hint(*, labels: dict | None, label: str) -> str:
-    import prompts as prompt_store
-    from apk_meta import resolve_source_lang
-
     lang = resolve_source_lang(labels)
     display = label.strip() or "-"
     return prompt_store.render(
@@ -254,8 +253,6 @@ def build_opencode_prompt(
     label: str = "",
 ) -> str:
     """Render opencode.initial from config/prompts.json."""
-    import prompts as prompt_store
-
     snap = _attach_source_lang(
         snap or workspace_ready_snapshot(),
         labels=labels,
@@ -276,8 +273,6 @@ def build_opencode_resume_prompt(
     **extra_slots,
 ) -> str:
     """kind: stall_continue | deadline_persist | missing_output | final_csv_review | large_csv_review | quality_*."""
-    import prompts as prompt_store
-
     snap = _attach_source_lang(
         snap or workspace_ready_snapshot(),
         labels=labels,
@@ -289,8 +284,6 @@ def build_opencode_resume_prompt(
 
 def build_opencode_cmd(prompt: str) -> list[str]:
     """Preview helper for tests; production uses OpenCodeSessionManager."""
-    import shutil
-
     exe = shutil.which(config.OPENCODE_CMD) or config.OPENCODE_CMD
     root = str(_task_root.resolve()) if _task_root is not None else str(config.WORKSPACE_ROOT.resolve())
     return [
@@ -308,8 +301,6 @@ def build_opencode_cmd(prompt: str) -> list[str]:
 
 
 def _opencode_tests_ok() -> bool:
-    from opencode_session import output_csv_has_content
-
     return output_csv_has_content(opencode_output_csv())
 
 
@@ -344,9 +335,6 @@ def invoke_opencode(
     返回前保证 tests.csv 存在（成功内容或解密失败标记）。
     """
     global _task_root
-    from opencode_session import OpenCodeSessionManager
-    from shared.archive_contract import task_layout
-
     _task_root = Path(task_root).resolve()
     workspace = _task_root
     snap = _attach_source_lang(
@@ -411,8 +399,6 @@ def invoke_opencode(
         _append_opencode_task_log(log_fp, phase=phase, prompt=prompt, result=result)
         reason = getattr(result, "kill_reason", None)
         if reason in ("stop", "interrupt"):
-            from opencode_session import OpenCodeStopped
-
             raise OpenCodeStopped(f"opencode {reason}")
         return result
 
@@ -484,8 +470,6 @@ def invoke_opencode(
     export_ok = False
     if session_id:
         try:
-            from opencode_session import export_session_json
-
             export_session_json(session_id, cwd=workspace, out_path=export_path)
             export_ok = True
         except Exception as exc:
@@ -562,8 +546,6 @@ def _read_tests_csv_text() -> str:
 
 def _apply_sensitive_filter() -> int:
     """Drop tests.csv lines that contain sensitive substrings."""
-    from shared.sensitive_words import filter_sensitive_file
-
     path = opencode_output_csv()
     removed = filter_sensitive_file(path)
     if removed:
@@ -577,9 +559,6 @@ def _detect_quality_issue(text: str) -> tuple[str | None, dict]:
     Return (prompt_kind, slots) or (None, {}).
     Order: terminal → empty → garbled → sensitive → too_few.
     """
-    from csv_quality import check_csv_quality, match_terminal_status
-    from shared.sensitive_words import scan_sensitive_hits
-
     if match_terminal_status(text) is not None:
         return None, {}
 
@@ -615,8 +594,6 @@ def _resume_quality_gate(mgr, apk_name, snap, task_key, run_fn):
     Single loop: empty→classify up to EMPTY_CLASSIFY_MAX; others→resume up to N.
     After pass, filter sensitive lines and re-check once.
     """
-    from csv_quality import match_terminal_status
-
     if not mgr.lookup_session_id(task_key):
         _log.error("no session_id for quality resume task=%s", task_key)
         return
@@ -701,8 +678,6 @@ def _content_line_count(text: str) -> int:
 
 def _ask_large_csv_review(apk_name, snap, run_fn):
     """If CSV is huge, one extra OpenCode pass focused on garbled / banned words."""
-    from csv_quality import match_terminal_status
-
     text = _read_tests_csv_text()
     if match_terminal_status(text) is not None:
         return
@@ -733,8 +708,6 @@ def _ask_large_csv_review(apk_name, snap, run_fn):
 
 def _ask_empty_classify(apk_name, snap, run_fn):
     """One OpenCode turn asking for assets_missing or decrypt_failed marker."""
-    from csv_quality import check_csv_quality, match_terminal_status
-
     text = _read_tests_csv_text()
     if match_terminal_status(text) is not None:
         return
@@ -788,8 +761,6 @@ def wait_for_csv(apk_name: str, timeout_sec: float | None = None) -> tuple[Path,
 
 
 def classify_csv(text: str) -> str:
-    from csv_quality import match_terminal_status
-
     status = match_terminal_status(text)
     return status if status is not None else "success"
 
@@ -804,15 +775,7 @@ def archive_csv(csv_path: Path, apk_stem: str, label: str, body_text: str) -> Pa
     safe_label = sanitize_label_for_filename(label)
     dest = config.RESULT_DIR / f"{apk_stem}_{safe_label}.csv"
 
-    try:
-        from zh_script import join_csv_body, split_body_text
-
-        split = split_body_text(body_text)
-    except ImportError:
-        _log.warning("hanzidentifier missing; archive without script split")
-        dest.write_text(body_text, encoding="utf-8-sig")
-        _log.info("result csv: %s", dest)
-        return dest
+    split = split_body_text(body_text)
 
     if split.is_pure:
         dest.write_text(body_text, encoding="utf-8-sig")

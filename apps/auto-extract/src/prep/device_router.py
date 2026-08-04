@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _PKG_ACTIVITY_RE = re.compile(r"([a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+")
-_handlers_loaded = False
 
 
 def parse_rotation_token(raw: str) -> int | None:
@@ -102,17 +101,7 @@ def register(handler: DeviceHandler) -> None:
 
 
 def dispatch(adb: AdbDevice) -> DeviceHandler:
-    _ensure_handlers()
     for handler in HANDLERS:
         if handler.match(adb):
             return handler
     return _DEFAULT
-
-
-def _ensure_handlers() -> None:
-    global _handlers_loaded
-    if _handlers_loaded:
-        return
-    _handlers_loaded = True
-    # Side-effect: mumu then xiaomi (order matters).
-    from prep import device_handlers as _device_handlers  # noqa: F401

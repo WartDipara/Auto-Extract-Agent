@@ -29,6 +29,11 @@ def handle_get_texts(body: dict, source_path: Path):
         _log.warning("get-texts missing urls: %s", source_path.name)
         _move_processed(source_path)
         return
+    im_chat_id = ""
+    if isinstance(body, dict):
+        im_chat_id = str(body.get("im_chat_id") or "").strip()
     ensure_worker()
-    queue_manager.enqueue_urls(urls, source_file=source_path.name)
+    queue_manager.enqueue_urls(
+        urls, source_file=source_path.name, im_chat_id=im_chat_id
+    )
     _move_processed(source_path)

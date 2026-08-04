@@ -11,7 +11,6 @@ from errors.stage import current_stage
 _log = logging.getLogger(__name__)
 
 _MAPPERS: list[ErrorMapper] = []
-_mappers_loaded = False
 
 
 class ErrorMapper(Protocol):
@@ -28,7 +27,6 @@ def register_mapper(mapper: ErrorMapper) -> None:
 
 
 def normalize(exc: BaseException, *, stage: str | None = None) -> ErrorInfo:
-    _ensure_mappers()
     resolved_stage = stage if stage is not None else current_stage()
     for mapper in _MAPPERS:
         if mapper.match(exc):
@@ -48,11 +46,3 @@ def normalize(exc: BaseException, *, stage: str | None = None) -> ErrorInfo:
         status="failed",
         cause_type=type(exc).__name__,
     )
-
-
-def _ensure_mappers() -> None:
-    global _mappers_loaded
-    if _mappers_loaded:
-        return
-    _mappers_loaded = True
-    from errors import mappers as _mappers  # noqa: F401

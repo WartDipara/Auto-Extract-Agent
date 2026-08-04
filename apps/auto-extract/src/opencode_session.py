@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue as queue_mod
 import shutil
 import subprocess
 import threading
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import config
+from csv_quality import has_extract_content
 from shared.proc_util import detached_popen_kwargs, kill_process_tree
 
 _log = logging.getLogger(__name__)
@@ -53,8 +55,6 @@ def output_csv_has_content(path: Path | None) -> bool:
         text = path.read_text(encoding="utf-8-sig", errors="replace")
     except OSError:
         return False
-    from csv_quality import has_extract_content
-
     return has_extract_content(text)
 
 
@@ -313,8 +313,6 @@ def _run_json_stream(
     hard_timeout_sec: float | None = None,
     stop_path: Path | None = None,
 ) -> OpenCodeRunResult:
-    import queue as queue_mod
-
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),

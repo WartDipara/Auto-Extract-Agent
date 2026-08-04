@@ -8,9 +8,13 @@ Coordinates are mapped into adb tap space when device_w/device_h are provided
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from paddleocr import PaddleOCR
+from PIL import Image
 
 _log = logging.getLogger(__name__)
 
@@ -32,11 +36,7 @@ def _get_engine():
     global _ocr_engine
     if _ocr_engine is not None:
         return _ocr_engine
-    import os
-
     os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
-    from paddleocr import PaddleOCR
-
     _ocr_engine = PaddleOCR(
         lang="ch",
         ocr_version="PP-OCRv4",
@@ -54,11 +54,6 @@ def _get_engine():
 
 def _prepare_ocr_image(image_path: Path) -> tuple[Path, float, int, int]:
     """Return (path_for_ocr, scale, src_w, src_h) where scale = shrunk/original (≤1)."""
-    try:
-        from PIL import Image
-    except ImportError:
-        return image_path, 1.0, 0, 0
-
     with Image.open(image_path) as im:
         w, h = im.size
         long_side = max(w, h)
