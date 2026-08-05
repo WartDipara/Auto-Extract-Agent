@@ -176,7 +176,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
 | Lifecycle | Online message includes usage; offline to announce chat; core fault/recover is edge-only (no spam) |
-| Core heartbeat | Module A writes `state/heartbeat` every 10s; IM marks stale after `CORE_HEARTBEAT_STALE_SEC` (default 45) |
+| Core heartbeat | Module A writes `state/heartbeat` every 5s; IM marks stale after 15s (hardcoded) |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |

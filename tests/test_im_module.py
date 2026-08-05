@@ -265,35 +265,45 @@ def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
     assert data["get-texts"]["urls"] == ["https://a.apk", "https://b.apk"]
 
 
-def test_create_channel_routes(monkeypatch):
+def test_create_channel_routes():
+    from types import SimpleNamespace
+
     from channels.factory import create_channel
 
-    monkeypatch.setenv("FEISHU_APP_ID", "cli_x")
-    monkeypatch.setenv("FEISHU_APP_SECRET", "sec")
-    ch = create_channel("feishu")
+    ch = create_channel(
+        SimpleNamespace(
+            IM_CHANNEL="feishu",
+            FEISHU_APP_ID="cli_x",
+            FEISHU_APP_SECRET="sec",
+        )
+    )
     assert ch.__class__.__name__ == "FeishuChannel"
 
-    for key in (
-        "DINGTALK_CLIENT_ID",
-        "DINGTALK_CLIENT_SECRET",
-        "DINGTALK_APP_KEY",
-        "DINGTALK_APP_SECRET",
-        "DINGTALK_ROBOT_CODE",
-    ):
-        monkeypatch.delenv(key, raising=False)
     try:
-        create_channel("dingtalk")
+        create_channel(
+            SimpleNamespace(
+                IM_CHANNEL="dingtalk",
+                DINGTALK_CLIENT_ID="",
+                DINGTALK_CLIENT_SECRET="",
+                DINGTALK_ROBOT_CODE="",
+            )
+        )
         assert False, "expected SystemExit"
     except SystemExit as exc:
         assert "DINGTALK" in str(exc)
 
-    monkeypatch.setenv("DINGTALK_CLIENT_ID", "ding_id")
-    monkeypatch.setenv("DINGTALK_CLIENT_SECRET", "ding_sec")
-    ding = create_channel("dingtalk")
+    ding = create_channel(
+        SimpleNamespace(
+            IM_CHANNEL="dingtalk",
+            DINGTALK_CLIENT_ID="ding_id",
+            DINGTALK_CLIENT_SECRET="ding_sec",
+            DINGTALK_ROBOT_CODE="",
+        )
+    )
     assert ding.__class__.__name__ == "DingTalkChannel"
 
     try:
-        create_channel("unknown")
+        create_channel(SimpleNamespace(IM_CHANNEL="unknown"))
         assert False, "expected SystemExit"
     except SystemExit:
         pass

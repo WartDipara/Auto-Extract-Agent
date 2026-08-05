@@ -13,51 +13,37 @@ _AUTO = _REPO_ROOT / "apps" / "auto-extract"
 load_dotenv(_APP_ROOT / ".env")
 load_dotenv(_AUTO / ".env", override=False)
 
-IM_CHANNEL = os.environ.get("IM_CHANNEL", "feishu").strip().lower() or "feishu"
+IM_CHANNEL = (os.environ.get("IM_CHANNEL") or "").strip().lower()
 
-FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID", "").strip()
-FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET", "").strip()
+FEISHU_APP_ID = (os.environ.get("FEISHU_APP_ID") or "").strip()
+FEISHU_APP_SECRET = (os.environ.get("FEISHU_APP_SECRET") or "").strip()
 
 DINGTALK_CLIENT_ID = (
-    os.environ.get("DINGTALK_CLIENT_ID", "").strip()
-    or os.environ.get("DINGTALK_APP_KEY", "").strip()
+    (os.environ.get("DINGTALK_CLIENT_ID") or "").strip()
+    or (os.environ.get("DINGTALK_APP_KEY") or "").strip()
 )
 DINGTALK_CLIENT_SECRET = (
-    os.environ.get("DINGTALK_CLIENT_SECRET", "").strip()
-    or os.environ.get("DINGTALK_APP_SECRET", "").strip()
+    (os.environ.get("DINGTALK_CLIENT_SECRET") or "").strip()
+    or (os.environ.get("DINGTALK_APP_SECRET") or "").strip()
 )
-DINGTALK_ROBOT_CODE = os.environ.get("DINGTALK_ROBOT_CODE", "").strip()
+DINGTALK_ROBOT_CODE = (os.environ.get("DINGTALK_ROBOT_CODE") or "").strip()
 
-INBOX_DIR = Path(os.environ.get("INBOX_DIR", str(_AUTO / "inbox")))
-TASKS_DB = Path(os.environ.get("TASKS_DB", str(_AUTO / "state" / "tasks.db")))
-QUERY_EXPORT_DIR = Path(
-    os.environ.get("QUERY_EXPORT_DIR", str(_APP_ROOT / "state" / "query_exports"))
-)
+INBOX_DIR = (_AUTO / "inbox").resolve()
+TASKS_DB = (_AUTO / "state" / "tasks.db").resolve()
+QUERY_EXPORT_DIR = (_APP_ROOT / "state" / "query_exports").resolve()
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
-POLL_SEC = float(os.environ.get("POLL_SEC", "3") or "3")
-ZIP_WAIT_SEC = float(os.environ.get("ZIP_WAIT_SEC", "600") or "600")
+POLL_SEC = 3.0
+ZIP_WAIT_SEC = 600.0
 
 _announce = (os.environ.get("ANNOUNCE_CHAT_ID") or "").strip()
 if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
 ANNOUNCE_CHAT_ID = _announce
-ANNOUNCE_CHAT_STATE = Path(
-    os.environ.get(
-        "ANNOUNCE_CHAT_STATE",
-        str(_APP_ROOT / "state" / "announce_chat.json"),
-    )
-)
+ANNOUNCE_CHAT_STATE = (_APP_ROOT / "state" / "announce_chat.json").resolve()
 
-CORE_HEARTBEAT_PATH = Path(
-    os.environ.get(
-        "CORE_HEARTBEAT_PATH",
-        str(_AUTO / "state" / "heartbeat"),
-    )
-)
-CORE_HEARTBEAT_STALE_SEC = float(
-    os.environ.get("CORE_HEARTBEAT_STALE_SEC", "45") or "45"
-)
+CORE_HEARTBEAT_PATH = (_AUTO / "state" / "heartbeat").resolve()
+CORE_HEARTBEAT_STALE_SEC = 15.0
 
 BOT_NAME = "Lino"
 

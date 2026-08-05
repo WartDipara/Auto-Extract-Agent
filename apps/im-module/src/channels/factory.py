@@ -1,30 +1,24 @@
 from __future__ import annotations
 
-import os
+from typing import Any
 
 from channels.base import Channel
 from channels.dingtalk import DingTalkChannel
 from channels.feishu import FeishuChannel
 
 
-def create_channel(name: str) -> Channel:
-    key = (name or "").strip().lower()
+def create_channel(cfg: Any) -> Channel:
+    key = (getattr(cfg, "IM_CHANNEL", "") or "").strip().lower()
     if key in ("feishu", "lark"):
-        app_id = os.environ.get("FEISHU_APP_ID", "").strip()
-        app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
+        app_id = (getattr(cfg, "FEISHU_APP_ID", "") or "").strip()
+        app_secret = (getattr(cfg, "FEISHU_APP_SECRET", "") or "").strip()
         if not app_id or not app_secret:
             raise SystemExit("set FEISHU_APP_ID and FEISHU_APP_SECRET")
         return FeishuChannel(app_id, app_secret)
     if key in ("dingtalk", "dingding"):
-        client_id = (
-            os.environ.get("DINGTALK_CLIENT_ID", "").strip()
-            or os.environ.get("DINGTALK_APP_KEY", "").strip()
-        )
-        client_secret = (
-            os.environ.get("DINGTALK_CLIENT_SECRET", "").strip()
-            or os.environ.get("DINGTALK_APP_SECRET", "").strip()
-        )
-        robot_code = os.environ.get("DINGTALK_ROBOT_CODE", "").strip() or None
+        client_id = (getattr(cfg, "DINGTALK_CLIENT_ID", "") or "").strip()
+        client_secret = (getattr(cfg, "DINGTALK_CLIENT_SECRET", "") or "").strip()
+        robot_code = (getattr(cfg, "DINGTALK_ROBOT_CODE", "") or "").strip() or None
         if not client_id or not client_secret:
             raise SystemExit(
                 "set DINGTALK_CLIENT_ID/DINGTALK_CLIENT_SECRET "
@@ -35,4 +29,4 @@ def create_channel(name: str) -> Channel:
             client_secret,
             robot_code=robot_code,
         )
-    raise SystemExit(f"unknown IM_CHANNEL={name!r}; use feishu | dingtalk")
+    raise SystemExit(f"unknown IM_CHANNEL={key!r}; use feishu | dingtalk")

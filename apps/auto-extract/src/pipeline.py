@@ -42,7 +42,7 @@ _started = False
 _start_lock = threading.Lock()
 _adb_pool: AdbPool | None = None
 _opencode_pool: OpenCodePool | None = None
-_HEARTBEAT_SEC = 10.0
+_HEARTBEAT_SEC = 5.0
 
 
 def _write_heartbeat() -> None:

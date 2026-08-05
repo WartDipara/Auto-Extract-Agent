@@ -22,7 +22,7 @@ def main() -> None:
     print(f"im-module channel={config.IM_CHANNEL}", flush=True)
     print(f"im-module inbox={config.INBOX_DIR}", flush=True)
     print(f"im-module tasks_db={config.TASKS_DB}", flush=True)
-    Courier(create_channel(config.IM_CHANNEL)).start()
+    Courier(create_channel(config)).start()
 
 
 if __name__ == "__main__":

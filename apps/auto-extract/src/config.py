@@ -25,39 +25,32 @@ SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
 HEARTBEAT_FILE = STATE_DIR / "heartbeat"
-QUEUE_RECENT_DONE_MAX = int(os.environ.get("QUEUE_RECENT_DONE_MAX", "50") or "50")
-TASKS_DB = Path(os.environ.get("TASKS_DB", str(STATE_DIR / "tasks.db")))
-DOWNLOAD_WORKERS = int(os.environ.get("DOWNLOAD_WORKERS", "3") or "3")
-PATCH_WORKERS = int(os.environ.get("PATCH_WORKERS", "2") or "2")
-OPENCODE_SLOTS = int(os.environ.get("OPENCODE_SLOTS", "1") or "1")
-DEVICE_WAIT_TIMEOUT_SEC = float(
-    os.environ.get("DEVICE_WAIT_TIMEOUT_SEC", "3600") or "3600"
-)
-OPENCODE_WAIT_TIMEOUT_SEC = float(
-    os.environ.get("OPENCODE_WAIT_TIMEOUT_SEC", "7200") or "7200"
-)
-# Required for buf_done encrypted pack; no hardcoded default.
+TASKS_DB = STATE_DIR / "tasks.db"
+
+QUEUE_RECENT_DONE_MAX = 50
+DOWNLOAD_WORKERS = 3
+PATCH_WORKERS = 2
+OPENCODE_SLOTS = 1
+DEVICE_WAIT_TIMEOUT_SEC = 3600.0
+OPENCODE_WAIT_TIMEOUT_SEC = 7200.0
+
+# Required for buf_done encrypted pack; set in apps/auto-extract/.env
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"
 
 PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
 PREP_FOREGROUND_POLL_SEC = 1.5
-# Consecutive raw observations before acting (Splash/focus gaps are transient).
-PREP_CRASH_CONFIRM = int(os.environ.get("PREP_CRASH_CONFIRM", "3") or "3")
-PREP_BACKGROUND_CONFIRM = int(
-    os.environ.get("PREP_BACKGROUND_CONFIRM", "2") or "2"
-)
+PREP_CRASH_CONFIRM = 3
+PREP_BACKGROUND_CONFIRM = 2
 
-OPENCODE_CMD = os.environ.get("OPENCODE_CMD", "opencode").strip() or "opencode"
+OPENCODE_CMD = "opencode"
 OPENCODE_SKILL = "get-game-text-skill"
-OPENCODE_VARIANT = os.environ.get("OPENCODE_VARIANT", "max").strip() or "max"
+OPENCODE_VARIANT = "max"
 OPENCODE_OUTPUT_NAME = "tests.csv"
-OPENCODE_STALL_SEC = int(os.environ.get("OPENCODE_STALL_SEC", "1800") or "1800")
+OPENCODE_STALL_SEC = 1800
 OPENCODE_MISSING_OUTPUT_MAX = 2
-OPENCODE_QUALITY_RESUME_MAX = int(
-    os.environ.get("OPENCODE_QUALITY_RESUME_MAX", "2") or "2"
-)
+OPENCODE_QUALITY_RESUME_MAX = 2
 OPENCODE_EMPTY_CLASSIFY_MAX = 1
 
 AGENT_TIMEOUT_SEC = 3600
@@ -66,24 +59,21 @@ CSV_GRACE_SEC = 10.0
 ASSETS_MISSING_TEXT = "资源文本文件在assets里找不到"
 DECRYPT_FAIL_TEXT = "解密失败"
 ABNORMAL_EXIT_TEXT = "异常退出"
-CSV_MIN_LINES = int(os.environ.get("CSV_MIN_LINES", "5000") or "5000")
-CSV_GARBLE_MIN_LINES = int(os.environ.get("CSV_GARBLE_MIN_LINES", "10") or "10")
-CSV_GARBLE_RATIO = float(os.environ.get("CSV_GARBLE_RATIO", "0.01") or "0.01")
-SENSITIVE_HIT_MIN = int(os.environ.get("SENSITIVE_HIT_MIN", "5") or "5")
-# Extra OpenCode review when extract is huge (garbled / banned words).
-CSV_LARGE_REVIEW_LINES = int(
-    os.environ.get("CSV_LARGE_REVIEW_LINES", "300000") or "300000"
-)
+CSV_MIN_LINES = 5000
+CSV_GARBLE_MIN_LINES = 10
+CSV_GARBLE_RATIO = 0.01
+SENSITIVE_HIT_MIN = 5
+CSV_LARGE_REVIEW_LINES = 300000
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_TIMEOUT_SEC = 300
 AAPT_PATH = ""
 ADB_CMD = "adb"
-# Safety ceiling for AI entry-screen gate (privacy + asset download). Scene exit is AI done().
 PREP_GATE_TIMEOUT_SEC = 1200
 PREP_OCR_POLL_SEC = 3.0
 PREP_AGENT_INTERVAL_SEC = 3.0
-ADB_SERIAL = os.environ.get("ADB_SERIAL", "").strip()
+# Optional pin; empty = adb auto-pick. Set in .env only.
+ADB_SERIAL = (os.environ.get("ADB_SERIAL") or "").strip()
 
 
 def task_workspace(task_key: str) -> Path:
