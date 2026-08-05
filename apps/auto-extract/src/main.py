@@ -20,15 +20,13 @@ from opencode_session import interrupt_active_run
 import queue_manager
 from prep.device_handlers import register_device_handlers
 from router import register
+from shared.service_log import setup_service_logging
 
 _log = logging.getLogger("auto_extract")
 
 
 def _setup_logging():
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    setup_service_logging(config.SERVICE_LOG)
 
 
 def _log_agent_paths():

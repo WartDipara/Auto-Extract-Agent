@@ -18,6 +18,17 @@ from ops_commands import (
 )
 
 _DISPLAY_COLS = ("task_id", "label", "status", "error", "updated_at")
+_GID_COLS = (
+    "task_id",
+    "label",
+    "status",
+    "error",
+    "updated_at",
+    "im_delivered_at",
+    "session_id",
+    "adb_serial",
+    "buf_done_zip",
+)
 _EXPORT_COLS = (
     "task_id",
     "label",
@@ -26,6 +37,9 @@ _EXPORT_COLS = (
     "url",
     "filename",
     "im_chat_id",
+    "session_id",
+    "adb_serial",
+    "im_delivered_at",
     "updated_at",
     "finished_at",
 )
@@ -126,8 +140,21 @@ def _format_gid(rows: list[sqlite3.Row]) -> str:
         label = _clip(str(row["label"] or "-"), _LABEL_MAX)
         when = to_shanghai(str(row["updated_at"] or ""))
         head = f"{row['task_id']}  {label}  {row['status']}  {when}"
+        bin_path = Path(str(row["buf_done_zip"] or "").strip())
+        bin_flag = "yes" if bin_path.is_file() else "no"
+        session = str(row["session_id"] or "").strip() or "-"
+        adb = str(row["adb_serial"] or "").strip() or "-"
+        lines = [
+            head,
+            f"delivered  {to_shanghai(str(row['im_delivered_at'] or ''))}",
+            f"buf_done   {bin_flag}",
+            f"session    {session}",
+            f"adb        {adb}",
+        ]
         err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
-        blocks.append(f"{head}\n{err}" if err else head)
+        if err:
+            lines.append(err)
+        blocks.append("\n".join(lines))
     return _fit_budget("\n\n".join(blocks))
 
 
@@ -175,6 +202,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
         return LedgerQueryResult(ok=False, message=str(exc))
 
     display_cols = ", ".join(_DISPLAY_COLS)
+    gid_cols = ", ".join(_GID_COLS)
     export_cols = ", ".join(_EXPORT_COLS)
     try:
         if cmd.kind == "query_progress":
@@ -240,7 +268,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                 )
             rows = list(
                 conn.execute(
-                    f"SELECT {display_cols} FROM tasks "
+                    f"SELECT {gid_cols} FROM tasks "
                     "WHERE task_id=? OR filename=? OR url=? "
                     "ORDER BY updated_at DESC LIMIT 5",
                     (gid, gid, gid),

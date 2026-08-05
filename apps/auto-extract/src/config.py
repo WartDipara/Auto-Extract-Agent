@@ -26,6 +26,7 @@ OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
 HEARTBEAT_FILE = STATE_DIR / "heartbeat"
 TASKS_DB = STATE_DIR / "tasks.db"
+SERVICE_LOG = STATE_DIR / "service.log"
 
 QUEUE_RECENT_DONE_MAX = 50
 DOWNLOAD_WORKERS = 3

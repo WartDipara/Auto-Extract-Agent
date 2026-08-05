@@ -41,9 +41,13 @@ if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
 ANNOUNCE_CHAT_ID = _announce
 ANNOUNCE_CHAT_STATE = (_APP_ROOT / "state" / "announce_chat.json").resolve()
+SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()
 
 CORE_HEARTBEAT_PATH = (_AUTO / "state" / "heartbeat").resolve()
+# Background poll: announce core down after this age.
 CORE_HEARTBEAT_STALE_SEC = 15.0
+# On user submit: treat core as unavailable sooner (≈2 missed heartbeats).
+CORE_SUBMIT_STALE_SEC = 10.0
 
 BOT_NAME = "Lino"
 
@@ -76,19 +80,27 @@ MSG_CORE_UP_VARIANTS = (
     "活过来了～服务已恢复",
 )
 
+MSG_ENQUEUE_CORE_DEFERRED_FIRST = (
+    f"对了，后台这会儿好像卡住了；不过任务已经记下，"
+    f"{BOT_NAME}修好后会自动接着做。"
+)
+MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
+    f"后台还在恢复中，任务已记下，好了会自动继续。"
+)
+_applicationName = "艺术家"
 OPS_TEMPLATE = (
     "用法：\n"
     "【提交任务】直接填入 APK 下载链接，可多条\n"
-    "  @艺术家 https://example.com/a.apk\n"
-    "  @艺术家 https://example.com/b.apk\n"
+    f"  @{_applicationName} https://example.com/a.apk\n"
+    f"  @{_applicationName} https://example.com/b.apk\n"
     "  ......\n"
     "\n"
     "【查询】\n"
-    "  @艺术家 query progress          查询进行中的任务\n"
-    "  @艺术家 query status success    按状态筛选（如 success / failed / timeout）\n"
-    "  @艺术家 query gid t-0002        查单个任务\n"
-    "  @艺术家 query export            导出全表 Excel\n"
-    "  @艺术家 query password          查看 .bin 解压密码\n"
+    f"  @{_applicationName} query progress          查询进行中的任务\n"
+    f"  @{_applicationName} query status success    按状态筛选（如 success / failed / timeout）\n"
+    f"  @{_applicationName} query gid t-0002        查单个任务\n"
+    f"  @{_applicationName} query export            导出全表 Excel\n"
+    f"  @{_applicationName} query password          查看 .bin 解压密码\n"
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi\n"
     "\n"

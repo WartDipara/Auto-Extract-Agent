@@ -105,6 +105,79 @@ def test_enqueue_does_not_block(tmp_path, monkeypatch):
         assert zf.namelist() == ["demo_异步.csv"]
 
 
+def test_pack_failure_marks_success_failed(tmp_path, monkeypatch):
+    _set_password(monkeypatch)
+    import buf_done
+    import config
+    from models import Task
+
+    monkeypatch.setattr(config, "BUF_DONE_DIR", tmp_path / "buf_done")
+    buf_done._worker_started = False
+    task = Task(task_id="t-pack", url="https://x/a.apk", status="success")
+    updates: list[dict] = []
+
+    def _get_task(task_id: str):
+        return task if task_id == "t-pack" else None
+
+    def _update_task(task_id: str, **fields):
+        updates.append(dict(fields))
+        for key, value in fields.items():
+            setattr(task, key, value)
+        return task
+
+    monkeypatch.setattr(buf_done.queue_manager, "get_task", _get_task)
+    monkeypatch.setattr(buf_done.queue_manager, "update_task", _update_task)
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(buf_done, "pack_result_zip", _boom)
+    primary = tmp_path / "pack_fail.csv"
+    primary.write_text("x\n", encoding="utf-8")
+    buf_done.enqueue_buf_done(primary, task_id="t-pack")
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and task.status == "success":
+        time.sleep(0.05)
+    assert task.status == "failed"
+    assert updates and "BUF_DONE_PACK" in str(updates[0].get("error", ""))
+
+
+def test_pack_failure_skips_non_success(tmp_path, monkeypatch):
+    _set_password(monkeypatch)
+    import buf_done
+    import config
+    from models import Task
+
+    monkeypatch.setattr(config, "BUF_DONE_DIR", tmp_path / "buf_done")
+    buf_done._worker_started = False
+    task = Task(task_id="t-miss", url="https://x/a.apk", status="assets_missing")
+    touched = []
+
+    monkeypatch.setattr(
+        buf_done.queue_manager,
+        "get_task",
+        lambda task_id: task if task_id == "t-miss" else None,
+    )
+    monkeypatch.setattr(
+        buf_done.queue_manager,
+        "update_task",
+        lambda *a, **k: touched.append(k) or task,
+    )
+    monkeypatch.setattr(
+        buf_done,
+        "pack_result_zip",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("disk full")),
+    )
+    primary = tmp_path / "pack_skip.csv"
+    primary.write_text("x\n", encoding="utf-8")
+    buf_done.enqueue_buf_done(primary, task_id="t-miss")
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and buf_done._job_queue.unfinished_tasks:
+        time.sleep(0.05)
+    assert task.status == "assets_missing"
+    assert not touched
+
+
 if __name__ == "__main__":
     import tempfile
 

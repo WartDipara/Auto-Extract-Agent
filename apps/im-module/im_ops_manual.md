@@ -73,7 +73,7 @@ Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
 Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** when shown).
 Full dump uses **`query export`** (Excel `.xlsx` file).
 
-Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`.
+Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`, delivery time, whether `.bin` exists, `session`, `adb`.
 
 ### 3.1 Progress (active queue)
 
@@ -101,6 +101,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 ```
 
 - Match order: `task_id` → `filename` → `url` (exact).
+- Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`.
 - Miss: `not found: …`.
 
 ### 3.4 Export full table
@@ -109,7 +110,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 @bot query export
 ```
 
-- Excel columns: `task_id,label,status,error,url,filename,updated_at,finished_at` (UTC).
+- Excel columns: `task_id,label,status,error,url,filename,im_chat_id,session_id,adb_serial,im_delivered_at,updated_at,finished_at` (UTC).
 - Hard cap 50000 rows; truncated exports note `truncated=true`.
 - Feishu sends the file; DingTalk may fall back to a local path hint.
 
@@ -176,7 +177,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
 | Lifecycle | Online message includes usage; offline to announce chat; core fault/recover is edge-only (no spam) |
-| Core heartbeat | Module A writes `state/heartbeat` every 5s; IM marks stale after 15s (hardcoded) |
+| Core heartbeat | Module A writes `state/heartbeat` every 5s. IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
 | Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |

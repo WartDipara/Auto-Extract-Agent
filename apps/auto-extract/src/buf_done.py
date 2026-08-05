@@ -3,21 +3,30 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyzipper
 
 import config
+import queue_manager
 
 _log = logging.getLogger(__name__)
 
-_job_queue: queue.Queue[Path | None] = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_started = False
 
 
+@dataclass(frozen=True)
+class BufDoneJob:
+    primary_csv: Path
+    task_id: str = ""
+
+
+_job_queue: queue.Queue[BufDoneJob | None] = queue.Queue()
+
+
 def collect_result_csvs(primary_csv: Path) -> list[Path]:
-    """Primary result CSV plus optional ``{stem}_T.csv`` sibling."""
     primary = Path(primary_csv)
     files = [primary]
     trad = primary.with_name(f"{primary.stem}_T{primary.suffix}")
@@ -34,7 +43,6 @@ def _zip_password() -> bytes:
 
 
 def pack_result_zip(primary_csv: Path, *, out_dir: Path | None = None) -> Path:
-    """Encrypt primary (+ optional _T) into ``buf_done/{stem}.bin``. Keeps source CSVs."""
     primary = Path(primary_csv)
     if not primary.is_file():
         raise FileNotFoundError(primary)
@@ -57,44 +65,68 @@ def pack_result_zip(primary_csv: Path, *, out_dir: Path | None = None) -> Path:
         out_path,
         [p.name for p in members],
     )
-    print(
-        f"buf_done bin: {out_path} ({len(members)} file{'s' if len(members) != 1 else ''})",
-        flush=True,
-    )
     return out_path
 
 
-def _worker_loop():
+def _mark_pack_failed(task_id: str, primary: Path, exc: BaseException) -> None:
+    if not task_id:
+        return
+    err = f"[BUF_DONE_PACK@archive] {primary.name}: {exc}"
+    try:
+        task = queue_manager.get_task(task_id)
+        if task is None:
+            _log.error("task_id=%s missing for buf_done error: %s", task_id, err)
+            return
+        if task.status != "success":
+            _log.error(
+                "task_id=%s buf_done pack failed while status=%s: %s",
+                task_id,
+                task.status,
+                err,
+            )
+            return
+        queue_manager.update_task(task_id, status="failed", error=err)
+        _log.error("task_id=%s %s", task_id, err)
+    except Exception:
+        _log.exception("task_id=%s failed to record buf_done error", task_id)
+
+
+def _worker_loop() -> None:
     while True:
-        primary = _job_queue.get()
+        job = _job_queue.get()
         try:
-            if primary is None:
+            if job is None:
                 return
-            pack_result_zip(primary)
+            pack_result_zip(job.primary_csv)
         except Exception as exc:
-            _log.exception("buf_done pack failed for %s: %s", primary, exc)
-            print(f"buf_done pack failed: {primary} ({exc})", flush=True)
+            primary = job.primary_csv if job is not None else Path("?")
+            task_id = job.task_id if job is not None else ""
+            _log.exception(
+                "buf_done pack failed task_id=%s csv=%s: %s",
+                task_id or "-",
+                primary,
+                exc,
+            )
+            _mark_pack_failed(task_id, primary, exc)
         finally:
             _job_queue.task_done()
 
 
-def ensure_buf_done_worker():
+def ensure_buf_done_worker() -> None:
     global _worker_started
     with _worker_lock:
         if _worker_started:
             return
         config.BUF_DONE_DIR.mkdir(parents=True, exist_ok=True)
-        thread = threading.Thread(
+        threading.Thread(
             target=_worker_loop,
             name="buf-done-worker",
             daemon=True,
-        )
-        thread.start()
+        ).start()
         _worker_started = True
         _log.info("buf-done worker started")
 
 
-def enqueue_buf_done(primary_csv: Path) -> None:
-    """Queue zip packing; returns immediately. Failures stay in the worker."""
+def enqueue_buf_done(primary_csv: Path, *, task_id: str = "") -> None:
     ensure_buf_done_worker()
-    _job_queue.put(Path(primary_csv))
+    _job_queue.put(BufDoneJob(primary_csv=Path(primary_csv), task_id=task_id or ""))

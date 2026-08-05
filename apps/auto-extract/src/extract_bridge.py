@@ -123,15 +123,13 @@ def csv_has_content(apk_name: str) -> bool:
     return bool(text)
 
 
-def ensure_csv_after_agent(apk_name: str, returncode: int) -> Path:
+def ensure_csv_after_agent(apk_name: str) -> Path:
+    """Ensure tests.csv exists for archive; invent abnormal-exit row if missing."""
     if csv_has_content(apk_name):
         return result_csv_path(apk_name)
-    agent = "opencode"
-    if returncode != 0:
-        reason = f"{agent} 非零退出 exit={returncode}，未产出 CSV"
-    else:
-        reason = f"{agent} 对话提前结束（进程已退出），未产出 CSV"
-    return write_abnormal_exit_csv(apk_name, reason=reason)
+    return write_abnormal_exit_csv(
+        apk_name, reason="opencode finished without CSV"
+    )
 
 
 def read_session_id_from_log(apk_name: str) -> str:

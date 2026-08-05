@@ -163,11 +163,24 @@ class Courier:
         path = write_inbox_json(config.INBOX_DIR, payload, request_id=request_id)
         if ack:
             self._channel.reply_text(
-                chat_id,
-                f"已入队：{path.name}\nurls={len(urls)}",
+                chat_id, self._enqueue_ack_text(path.name, len(urls))
             )
         _log.info("submitted %s chat=%s urls=%s", path.name, chat_id, len(urls))
         return path
+
+    def _enqueue_ack_text(self, filename: str, url_count: int) -> str:
+        base = f"已入队：{filename}\nurls={url_count}"
+        if self._core_is_healthy(stale_sec=config.CORE_SUBMIT_STALE_SEC):
+            return base
+        # Same group already heard via this ack — suppress later poll broadcast.
+        first = not self._core_fault_announced
+        self._core_fault_announced = True
+        note = (
+            config.MSG_ENQUEUE_CORE_DEFERRED_FIRST
+            if first
+            else config.MSG_ENQUEUE_CORE_DEFERRED_AGAIN
+        )
+        return f"{base}\n{note}"
 
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
@@ -178,12 +191,17 @@ class Courier:
                 _log.exception("poll tick failed")
             self._stop.wait(config.POLL_SEC)
 
-    def _core_is_healthy(self) -> bool:
+    def _core_is_healthy(self, *, stale_sec: float | None = None) -> bool:
         path = Path(config.CORE_HEARTBEAT_PATH)
         if not path.is_file():
             return False
+        limit = (
+            float(config.CORE_HEARTBEAT_STALE_SEC)
+            if stale_sec is None
+            else float(stale_sec)
+        )
         age = time.time() - path.stat().st_mtime
-        return age <= float(config.CORE_HEARTBEAT_STALE_SEC)
+        return age <= limit
 
     def _check_core_health(self) -> None:
         healthy = self._core_is_healthy()

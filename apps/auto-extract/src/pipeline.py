@@ -237,9 +237,9 @@ def _extract_loop() -> None:
                 )
                 if result.returncode != 0:
                     _log.error(
-                        "opencode nonzero exit %s: %s",
+                        "task_id=%s opencode exit=%s (validate CSV in archive)",
+                        task.task_id,
                         result.returncode,
-                        (result.stderr or result.stdout or "").strip(),
                     )
             updated = queue_manager.update_task(
                 task.task_id, status="extract_done"
@@ -275,7 +275,7 @@ def _archive_loop() -> None:
             task_key = Path(filename).stem
             label = task.label or ""
             with stage_scope("archive"):
-                ensure_csv_after_agent(filename, 0)
+                ensure_csv_after_agent(filename)
                 csv_path, text = wait_for_csv(
                     filename, timeout_sec=config.CSV_GRACE_SEC
                 )
@@ -286,7 +286,7 @@ def _archive_loop() -> None:
                 if not session_id:
                     session_id = OpenCodeSessionManager().lookup_session_id(task_key)
                 archived = archive_csv(csv_path, task_key, label, body_text)
-                enqueue_buf_done(archived)
+                enqueue_buf_done(archived, task_id=task.task_id)
                 append_session_to_log(filename, session_id)
                 err_line = ""
                 error_info = None

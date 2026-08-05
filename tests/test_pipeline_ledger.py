@@ -227,17 +227,18 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "success",
             "",
             "",
-            "",
-            "",
+            "ses-1",
+            str(tmp_path / "a.bin"),
             "im_1.json",
-            "",
+            "emulator-5554",
             "2026-08-04T12:01:00Z",
             "2026-08-04T12:01:00Z",
             "2026-08-04T12:01:00Z",
-            "",
+            "2026-08-04T12:05:00Z",
             "group:cid-a",
         ),
     )
+    (tmp_path / "a.bin").write_bytes(b"x")
     conn.execute(
         "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -286,6 +287,10 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         ops_commands.OpsCommand(kind="query_gid", arg="t-0001")
     )
     assert gid.ok and "2026-08-04 20:01:00" in gid.message
+    assert "delivered  2026-08-04 20:05:00" in gid.message
+    assert "buf_done   yes" in gid.message
+    assert "session    ses-1" in gid.message
+    assert "adb        emulator-5554" in gid.message
 
     exported = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_export")

@@ -15,6 +15,7 @@ TASKS_DB = (_AUTO / "state" / "tasks.db").resolve()
 STATE_DIR = (_APP_ROOT / "state").resolve()
 LOCK_PATH = STATE_DIR / "gc.lock"
 AUDIT_PATH = STATE_DIR / "gc_audit.jsonl"
+SERVICE_LOG = STATE_DIR / "service.log"
 
 RETENTION_DAYS = 7.0
 RETENTION_SEC = RETENTION_DAYS * 86400.0

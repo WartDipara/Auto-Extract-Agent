@@ -265,6 +265,68 @@ def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
     assert data["get-texts"]["urls"] == ["https://a.apk", "https://b.apk"]
 
 
+def test_enqueue_ack_mentions_core_down_once(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "inbox_writer"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+
+    class _FakeChannel:
+        def __init__(self):
+            self.texts: list[tuple[str, str]] = []
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text):
+            self.texts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    inbox = tmp_path / "inbox"
+    hb = tmp_path / "heartbeat"
+    monkeypatch.setattr(config, "INBOX_DIR", inbox)
+    monkeypatch.setattr(config, "CORE_HEARTBEAT_PATH", hb)
+    monkeypatch.setattr(config, "CORE_SUBMIT_STALE_SEC", 10.0)
+    monkeypatch.setattr(config, "CORE_HEARTBEAT_STALE_SEC", 15.0)
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+
+    # No heartbeat file → submit path treats core as down.
+    c._enqueue_urls("group:cid-a", ["https://a.apk"], ack=True)
+    assert len(ch.texts) == 1
+    assert "已入队" in ch.texts[0][1]
+    assert "记下" in ch.texts[0][1]
+    assert c._core_fault_announced is True
+
+    # Poll must not broadcast a second core-down.
+    c._check_core_health()
+    assert len(ch.texts) == 1
+
+    # Second submit: shorter note, still no extra global announce.
+    c._enqueue_urls("group:cid-a", ["https://b.apk"], ack=True)
+    assert len(ch.texts) == 2
+    assert "恢复中" in ch.texts[1][1]
+    c._check_core_health()
+    assert len(ch.texts) == 2
+
+    # Recovery → one up announce (to announce chat; may skip if none learned).
+    hb.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "group:cid-a")
+    c._check_core_health()
+    assert c._core_fault_announced is False
+    assert any("继续" in t or "恢复" in t or "修好" in t or "搞定" in t or "活过来" in t for _, t in ch.texts)
+
+
 def test_create_channel_routes():
     from types import SimpleNamespace
 

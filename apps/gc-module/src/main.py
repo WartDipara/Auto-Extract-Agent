@@ -20,6 +20,7 @@ from collector import collect_candidates  # noqa: E402
 from lockfile import acquire_lock, release_lock  # noqa: E402
 from recheck import recheck_candidates  # noqa: E402
 from sweeper import sweep_all  # noqa: E402
+from shared.service_log import setup_service_logging  # noqa: E402
 
 _log = logging.getLogger("gc_module")
 
@@ -79,10 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    setup_service_logging(config.SERVICE_LOG)
 
     dry_run = bool(args.dry_run or config.DRY_RUN_ENV)
     interval = (
