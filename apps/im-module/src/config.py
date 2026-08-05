@@ -49,7 +49,7 @@ CORE_HEARTBEAT_STALE_SEC = 15.0
 # On user submit: treat core as unavailable sooner (≈2 missed heartbeats).
 CORE_SUBMIT_STALE_SEC = 10.0
 
-BOT_NAME = "Lino"
+BOT_NAME = "Viola"
 
 MSG_BOT_ONLINE_VARIANTS = (
     f"{BOT_NAME}已就位，可以开始工作了",
@@ -88,20 +88,19 @@ MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
     f"后台还在恢复中，任务已记下，好了会自动继续。"
 )
 # 故意保留，因爲當初創建機器人的時候沒想到不能改名！！
-_applicationName = "艺术家"
 OPS_TEMPLATE = (
     "用法：\n"
     "【提交任务】直接填入 APK 下载链接，可多条\n"
-    f"  @{_applicationName} https://example.com/a.apk\n"
-    f"  @{_applicationName} https://example.com/b.apk\n"
+    f"  @{BOT_NAME} https://example.com/a.apk\n"
+    f"  @{BOT_NAME} https://example.com/b.apk\n"
     "  ......\n"
     "\n"
     "【查询】\n"
-    f"  @{_applicationName} query progress          查询进行中的任务\n"
-    f"  @{_applicationName} query status success    按状态筛选（如 success / failed / timeout）\n"
-    f"  @{_applicationName} query gid t-0002        查单个任务\n"
-    f"  @{_applicationName} query export            导出全表 Excel\n"
-    f"  @{_applicationName} query password          查看 .bin 解压密码\n"
+    f"  @{BOT_NAME} query progress          查询进行中的任务\n"
+    f"  @{BOT_NAME} query status success    按状态筛选（如 success / failed / timeout）\n"
+    f"  @{BOT_NAME} query gid t-0002        查单个任务\n"
+    f"  @{BOT_NAME} query export            导出全表 Excel\n"
+    f"  @{BOT_NAME} query password          查看 .bin 解压密码\n"
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi\n"
     "\n"
