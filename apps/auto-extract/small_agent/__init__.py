@@ -1,5 +1,3 @@
-"""Prep UI decision agent (LangChain multi-provider + tools)."""
-
 from __future__ import annotations
 
 from small_agent.agent import UiAgentSession, ocr_worth_decide

@@ -1,5 +1,3 @@
-"""Extensible task error framework: TaskError, stage_scope, normalize, emit."""
-
 from errors.builtin_sinks import register_builtin_sinks
 from errors.mappers import register_builtin_mappers
 from errors.model import ErrorInfo, TaskError

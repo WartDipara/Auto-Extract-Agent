@@ -1,8 +1,3 @@
-"""
-Load prompt templates from config/prompts.json (open for extension).
-Business code fills slots; do not hardcode long prompts elsewhere.
-"""
-
 from __future__ import annotations
 
 import json

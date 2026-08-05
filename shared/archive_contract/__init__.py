@@ -1,11 +1,3 @@
-"""
-Shared workspace contract for auto-extract (core module).
-
-Per-task layout: workspace/<task_key>/{decoded,hotfix,outputs}
-Markers:
-  .stop — task discarded; interrupt OpenCode if running; purge later
-"""
-
 from __future__ import annotations
 
 import json

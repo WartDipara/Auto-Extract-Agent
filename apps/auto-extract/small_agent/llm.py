@@ -1,10 +1,3 @@
-"""Chat model factory via LangChain init_chat_model (multi-provider).
-
-Routing (OCP: extend by MODEL_ID / BASE_URL, not by editing callers):
-- BASE_URL set  → OpenAI-compatible endpoint (Minimax / GLM / DeepSeek / custom)
-- else           → LangChain provider:model inference (openai:…, anthropic:…, deepseek:…)
-"""
-
 from __future__ import annotations
 
 import logging

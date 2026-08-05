@@ -1,21 +1,18 @@
-# Purge task workspaces marked with .stop.
-# One-shot (for Task Scheduler):
-#   .\launch_purge_stopped.ps1
-# Loop every N seconds:
-#   .\launch_purge_stopped.ps1 -IntervalSec 600
+# DEPRECATED: use launch_gc_module.ps1
+# Forwards to GC module (unified 7-day retention; not immediate .stop purge).
 param(
-    [double]$IntervalSec = 0
+    [double]$IntervalSec = 0,
+    [switch]$DryRun
 )
 $ErrorActionPreference = "Stop"
+Write-Warning "launch_purge_stopped.ps1 is deprecated; use launch_gc_module.ps1"
 $RepoRoot = $PSScriptRoot
-$AppRoot = Join-Path $RepoRoot "apps\auto-extract"
-$Src = Join-Path $AppRoot "src"
-$env:PYTHONUTF8 = "1"
-$env:PYTHONPATH = "$Src;$RepoRoot"
-Set-Location $AppRoot
-$script = Join-Path $Src "purge_stopped.py"
+$launcher = Join-Path $RepoRoot "launch_gc_module.ps1"
+$launchArgs = @()
 if ($IntervalSec -gt 0) {
-    python $script --interval $IntervalSec
+    $launchArgs += @("-IntervalSec", $IntervalSec)
 } else {
-    python $script
+    $launchArgs += "-Once"
 }
+if ($DryRun) { $launchArgs += "-DryRun" }
+& $launcher @launchArgs

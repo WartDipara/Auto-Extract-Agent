@@ -1,5 +1,3 @@
-"""UI agent with InMemorySaver. One tool decision per OCR frame."""
-
 from __future__ import annotations
 
 import logging

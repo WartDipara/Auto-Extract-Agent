@@ -1,5 +1,3 @@
-"""Foreground watchdog: classify package focus; gate applies actions."""
-
 from __future__ import annotations
 
 import enum

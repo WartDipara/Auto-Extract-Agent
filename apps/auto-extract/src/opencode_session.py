@@ -1,8 +1,3 @@
-"""
-OpenCode 对话/会话管理：一任务一会话，新任务新开会话，session 落盘到 state。
-state 只记录 task_key + session_id + exit_code。
-"""
-
 from __future__ import annotations
 
 import json

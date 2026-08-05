@@ -1,13 +1,3 @@
-"""
-Debuggable APK prep (no apktool / no smali decode):
-
-1) Binary-patch AndroidManifest.xml to set android:debuggable=true
-2) Rewrite APK keeping other entries' compressed bytes as-is (drop META-INF)
-3) zipalign (skipped for huge/ZIP64 packs) + apksigner
-
-Manifest patcher adapted from julKali/makeDebuggable (with bugfix).
-"""
-
 from __future__ import annotations
 
 import builtins

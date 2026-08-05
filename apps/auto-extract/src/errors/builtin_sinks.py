@@ -1,5 +1,3 @@
-"""Built-in error sinks (order: stop marker → log → queue → meta)."""
-
 from errors.sinks import (
     LogSink,
     MetaSink,

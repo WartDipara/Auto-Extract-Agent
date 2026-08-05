@@ -1,5 +1,3 @@
-"""Entry-screen gate: foreground watch + DeepSeek OCR agent."""
-
 from __future__ import annotations
 
 import hashlib

@@ -1,5 +1,3 @@
-"""Post-process result CSVs into an encrypted .bin under buf_done/ (background)."""
-
 from __future__ import annotations
 
 import logging

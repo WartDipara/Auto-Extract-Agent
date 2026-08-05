@@ -1,5 +1,3 @@
-"""Error mapper router: register_mapper / normalize (dispatch)."""
-
 from __future__ import annotations
 
 import logging

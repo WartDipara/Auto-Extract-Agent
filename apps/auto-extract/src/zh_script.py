@@ -1,5 +1,3 @@
-"""Classify extract CSV lines as simplified vs traditional Chinese."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

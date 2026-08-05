@@ -1,10 +1,3 @@
-"""OCR helpers for this machine: Windows + CPU + PaddleOCR 3.7 / Paddle 3.3.
-
-Uses PP-OCRv4 mobile models (phone-game UI). enable_mkldnn=False required on Paddle 3.3 CPU.
-Coordinates are mapped into adb tap space when device_w/device_h are provided
-(portrait/landscape alignment; see prep.screen_coord).
-"""
-
 from __future__ import annotations
 
 import logging

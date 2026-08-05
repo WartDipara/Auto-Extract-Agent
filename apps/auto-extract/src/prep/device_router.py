@@ -1,5 +1,3 @@
-"""Device handler router: register/dispatch (same verbs as top-level router.py)."""
-
 from __future__ import annotations
 
 import logging

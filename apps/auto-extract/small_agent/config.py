@@ -1,5 +1,3 @@
-"""Load apps/auto-extract/.env for prep UI small_agent."""
-
 from __future__ import annotations
 
 import os

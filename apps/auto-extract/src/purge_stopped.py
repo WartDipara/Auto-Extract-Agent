@@ -1,53 +1,35 @@
-"""
-Purge task workspaces marked with .stop under apps/auto-extract/workspace.
-
-Usage (from repo root):
-  python apps/auto-extract/src/purge_stopped.py
-  python apps/auto-extract/src/purge_stopped.py --interval 600
-  .\\launch_purge_stopped.ps1
-  .\\launch_purge_stopped.ps1 -IntervalSec 600
-"""
-
 from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
-import time
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parent
 _REPO = _SRC.parent.parent.parent
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
-if str(_REPO) not in sys.path:
-    sys.path.insert(0, str(_REPO))
-
-import config  # noqa: E402
-from shared.archive_contract import purge_stopped_workspaces  # noqa: E402
+_GC_MAIN = _REPO / "apps" / "gc-module" / "src" / "main.py"
 
 _log = logging.getLogger("purge_stopped")
 
 
-def _run_once() -> list[str]:
-    root = config.WORKSPACE_ROOT
-    deleted = purge_stopped_workspaces(root)
-    if deleted:
-        print(f"purged {len(deleted)} workspace(s): {', '.join(deleted)}", flush=True)
-    else:
-        print(f"no stopped workspaces under {root}", flush=True)
-    return deleted
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Delete workspace/<task_key> dirs that contain a .stop marker."
+        description=(
+            "DEPRECATED wrapper → gc-module. "
+            "Prefer launch_gc_module.ps1 / apps/gc-module."
+        )
     )
     parser.add_argument(
         "--interval",
         type=float,
         default=0,
-        help="If >0, loop forever sleeping this many seconds between scans.",
+        help="If >0, forward as gc-module --interval (loop).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Forward --dry-run to gc-module.",
     )
     args = parser.parse_args(argv)
 
@@ -55,14 +37,34 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    _log.warning(
+        "purge_stopped.py is deprecated; forwarding to gc-module "
+        "(unified retention, not immediate .stop delete)"
+    )
 
+    if not _GC_MAIN.is_file():
+        _log.error("gc-module main missing: %s", _GC_MAIN)
+        return 1
+
+    cmd = [sys.executable, str(_GC_MAIN)]
     if args.interval and args.interval > 0:
-        _log.info("purge loop interval=%ss workspace=%s", args.interval, config.WORKSPACE_ROOT)
-        while True:
-            _run_once()
-            time.sleep(args.interval)
-    _run_once()
-    return 0
+        cmd.extend(["--interval", str(args.interval)])
+    else:
+        cmd.append("--once")
+    if args.dry_run:
+        cmd.append("--dry-run")
+
+    gc_src = _GC_MAIN.parent
+    env_pythonpath = str(gc_src) + ";" + str(_REPO)
+    import os
+
+    env = os.environ.copy()
+    prev = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        env_pythonpath if not prev else f"{env_pythonpath};{prev}"
+    )
+    env["PYTHONUTF8"] = "1"
+    return int(subprocess.call(cmd, cwd=str(_REPO / "apps" / "gc-module"), env=env))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,3 @@
-"""Feishu long-connection channel via official lark-oapi (see open.feishu.cn)."""
-
 from __future__ import annotations
 
 import json

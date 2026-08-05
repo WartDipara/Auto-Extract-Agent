@@ -1,5 +1,3 @@
-"""Connectivity probe before OCR navigation."""
-
 from __future__ import annotations
 
 import logging

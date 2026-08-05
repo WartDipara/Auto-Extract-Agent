@@ -1,9 +1,3 @@
-"""Post-OpenCode CSV quality checks before archiving to result/.
-
-Sensitive detection/filter lives in shared.sensitive_words; this module
-handles empty / garbled / too_few and terminal markers.
-"""
-
 from __future__ import annotations
 
 import re

@@ -1,5 +1,3 @@
-"""Fixed prompts for prep UI navigation agent."""
-
 from __future__ import annotations
 
 from typing import Any, Sequence

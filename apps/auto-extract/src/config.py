@@ -1,9 +1,3 @@
-"""
-Configuration for Auto-Extract-Agent / apps/auto-extract.
-
-Per-task workspaces live under apps/auto-extract/workspace/<task_key>/.
-"""
-
 from __future__ import annotations
 
 import os

@@ -1,13 +1,3 @@
-"""
-Shared sensitive-word table for post-extract CSV filtering / detection.
-
-Word list: shared/sensitive_words/sensitive.txt (one word per line).
-Place allowlist: shared/sensitive_words/place_allowlist.txt
-  (common geo / country names excluded; 恐暴涉政 compounds stay).
-Matching: exact full-line match only (整行全字匹配).
-Resume hit threshold is configured by callers (SENSITIVE_HIT_MIN).
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,5 +1,3 @@
-"""Built-in error mappers (first match wins; unexpected last)."""
-
 from errors.mappers.opencode_stopped import OpenCodeStoppedMapper
 from errors.mappers.task_error import TaskErrorMapper
 from errors.mappers.timeout import TimeoutMapper
