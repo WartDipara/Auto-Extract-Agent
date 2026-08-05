@@ -87,6 +87,7 @@ MSG_ENQUEUE_CORE_DEFERRED_FIRST = (
 MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
     f"后台还在恢复中，任务已记下，好了会自动继续。"
 )
+# 故意保留，因爲當初創建機器人的時候沒想到不能改名！！
 _applicationName = "艺术家"
 OPS_TEMPLATE = (
     "用法：\n"

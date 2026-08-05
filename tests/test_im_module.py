@@ -322,6 +322,7 @@ def test_enqueue_ack_mentions_core_down_once(tmp_path, monkeypatch):
     # Recovery → one up announce (to announce chat; may skip if none learned).
     hb.write_text("ok", encoding="utf-8")
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "group:cid-a")
+    c._online_announced = True
     c._check_core_health()
     assert c._core_fault_announced is False
     assert any("继续" in t or "恢复" in t or "修好" in t or "搞定" in t or "活过来" in t for _, t in ch.texts)
@@ -448,13 +449,19 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
 
-    # No heartbeat → one fault
+    # Before online intro, core-down must stay silent.
     c._check_core_health()
-    assert len(ch.texts) == 1 and ch.texts[0][0] == "group:cid-test"
-    assert ch.texts[0][1] in config.MSG_CORE_DOWN_VARIANTS
-    fault_msg = ch.texts[0][1]
+    assert ch.texts == []
+
+    # Online first, then one fault (folded into announce_online).
+    c._announce_online()
+    assert len(ch.texts) >= 2
+    assert "用法" in ch.texts[0][1]
+    assert ch.texts[1][1] in config.MSG_CORE_DOWN_VARIANTS
+    fault_msg = ch.texts[1][1]
+    before = list(ch.texts)
     c._check_core_health()
-    assert ch.texts == [("group:cid-test", fault_msg)]
+    assert ch.texts == before
 
     # Fresh heartbeat → one recover
     hb.write_text("ok\n", encoding="utf-8")
@@ -469,14 +476,19 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", tmp_path / "announce_chat.json")
     ch.texts.clear()
+    c._online_announced = False
     c._core_fault_announced = False
     hb.unlink()
     c._check_core_health()
     assert ch.texts == []
 
-    # Learn from first inbound message, then announce works
+    # Learn from first inbound → online, then core-down (still after intro).
     c.on_message("group:cid-learned", "help")
-    c._core_fault_announced = False
-    c._check_core_health()
-    assert ch.texts[-1][0] == "group:cid-learned"
-    assert ch.texts[-1][1] in config.MSG_CORE_DOWN_VARIANTS
+    assert any("用法" in t for _, t in ch.texts)
+    down_idxs = [
+        i
+        for i, (_, t) in enumerate(ch.texts)
+        if t in config.MSG_CORE_DOWN_VARIANTS
+    ]
+    online_idxs = [i for i, (_, t) in enumerate(ch.texts) if "用法" in t]
+    assert down_idxs and online_idxs and down_idxs[0] > online_idxs[0]

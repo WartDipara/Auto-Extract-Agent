@@ -42,8 +42,9 @@ class Courier:
 
     def start(self) -> None:
         self._register_lifecycle_hooks()
-        threading.Thread(target=self._poll_loop, name="im-poll", daemon=True).start()
+        # Online first, then core health — poll must not race ahead of intro.
         self._announce_online()
+        threading.Thread(target=self._poll_loop, name="im-poll", daemon=True).start()
         try:
             self._channel.start(self.on_message)
         except KeyboardInterrupt:
@@ -104,6 +105,7 @@ class Courier:
         text = f"{config.pick_bot_online()}\n\n{config.OPS_TEMPLATE}"
         if self._announce(text):
             self._online_announced = True
+            self._check_core_health()
 
     def _remember_chat(self, chat_id: str) -> None:
         if (config.ANNOUNCE_CHAT_ID or "").strip():
@@ -204,6 +206,8 @@ class Courier:
         return age <= limit
 
     def _check_core_health(self) -> None:
+        if not self._online_announced:
+            return
         healthy = self._core_is_healthy()
         if not healthy and not self._core_fault_announced:
             self._announce(config.pick_core_down())
