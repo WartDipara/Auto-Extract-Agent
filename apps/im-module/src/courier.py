@@ -38,6 +38,7 @@ class Courier:
         self._core_fault_announced = False
         self._hooks_registered = False
         self._missing_chat_warned: set[str] = set()
+        self._deliver_fail_warned: set[str] = set()
 
     def start(self) -> None:
         self._register_lifecycle_hooks()
@@ -230,11 +231,19 @@ class Courier:
                 self._channel.reply_text(
                     chat_id, f"结果已发送：{zip_path.name} ({label})"
                 )
+                self._deliver_fail_warned.discard(task_id)
+                return True
             except Exception as exc:
-                self._channel.reply_text(
-                    chat_id, f"发送结果失败：{label}\n{exc}"
-                )
-            return True
+                _log.exception("deliver file failed task_id=%s", task_id)
+                if task_id not in self._deliver_fail_warned:
+                    self._deliver_fail_warned.add(task_id)
+                    try:
+                        self._channel.reply_text(
+                            chat_id, f"发送结果失败：{label}\n{exc}"
+                        )
+                    except Exception:
+                        _log.exception("deliver failure notice failed task_id=%s", task_id)
+                return False
         err = done.get("error") or st
         self._channel.reply_text(chat_id, f"任务结束：{label}\n{st}\n{err}")
         return True

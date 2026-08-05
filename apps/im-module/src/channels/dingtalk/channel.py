@@ -13,7 +13,7 @@ from dingtalk_stream import AckMessage, ChatbotMessage, Credential, DingTalkStre
 from dingtalk_stream.chatbot import ChatbotHandler
 
 from channels.base import MessageHandler
-from channels.dingtalk.openapi import DingTalkOpenApi
+from channels.dingtalk.openapi import DingTalkOpenApi, resolve_send_file_meta
 from channels.dingtalk.session import parse_session_key, session_from_incoming
 
 _log = logging.getLogger(__name__)
@@ -172,12 +172,32 @@ class DingTalkChannel:
             raise
 
     def send_file(self, chat_id: str, path: Path) -> None:
-        # Enterprise robot OpenAPI has sampleText/Markdown/Image/Link templates;
-        # arbitrary file/zip delivery is a separate media flow — not wired yet.
-        raise NotImplementedError(
-            "dingtalk send_file not implemented; use reply_text for now "
-            f"(path={Path(path).name})"
-        )
+        path = Path(path)
+        file_name, file_type = resolve_send_file_meta(path)
+        target = parse_session_key(chat_id)
+        try:
+            media_id = self._api.upload_media(path, media_type="file")
+            if target.kind == "group":
+                self._api.send_group_file(
+                    target.value,
+                    media_id=media_id,
+                    file_name=file_name,
+                    file_type=file_type,
+                )
+            elif target.kind == "oto":
+                self._api.send_oto_file(
+                    target.value,
+                    media_id=media_id,
+                    file_name=file_name,
+                    file_type=file_type,
+                )
+            else:
+                raise ValueError(f"unknown session kind {target.kind}")
+        except Exception:
+            _log.exception(
+                "dingtalk send_file failed chat_id=%s path=%s", chat_id, path.name
+            )
+            raise
 
 
 def _extract_text(msg: ChatbotMessage) -> str | None:

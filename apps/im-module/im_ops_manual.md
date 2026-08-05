@@ -58,7 +58,7 @@ urls=<N>
 
 | Result | Delivery |
 | ------ | -------- |
-| `success` | Result file (`.bin`) + text note; DingTalk may fall back to a path hint if file send is unsupported |
+| `success` | Result file + text note (DingTalk sends `.bin` as `.zip`) |
 | Failure terminal | Text: `任务结束：<label>` + `status` + `error` |
 | Success but file missing too long | Timeout text (default ~10 min) |
 
