@@ -46,6 +46,10 @@ ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
 POLL_SEC = 3.0
 ZIP_WAIT_SEC = 600.0
+# After this many failed deliver ticks (or non-retryable errors), abandon.
+DELIVER_MAX_ATTEMPTS = 10
+FILE_SENT_STATE = (_APP_ROOT / "state" / "file_sent.json").resolve()
+FEISHU_RECONNECT_SEC = 3.0
 
 _announce = (os.environ.get("ANNOUNCE_CHAT_ID") or "").strip()
 if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
@@ -138,7 +142,7 @@ _MSG_GREET_BODIES = (
     ),
     (
         f"你好，我是{BOT_NAME}。\n"
-        f"当前支持提交任务与台账查询；详情见下方用法。"
+        f"当前支持提交任务与查询；详情见下方用法。"
     ),
 )
 

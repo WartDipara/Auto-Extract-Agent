@@ -108,8 +108,15 @@ def run_device_stage(
     stem = apk_path.stem
     adb = AdbDevice(serial=serial)
     stage(f"adb device ready {serial}")
-    if adb.ensure_uninstalled(package_name):
-        stage(f"uninstalled existing {package_name}")
+    try:
+        if adb.ensure_uninstalled(package_name):
+            stage(f"uninstalled existing {package_name}")
+    except Exception as exc:
+        _log.warning(
+            "ensure_uninstalled before install failed (continue install): %s",
+            exc,
+        )
+        stage(f"pre-uninstall warning; continue install: {exc}")
     stage(f"installing {signed_apk.name}")
     try:
         dispatch_device(adb).install_apk(
@@ -130,7 +137,11 @@ def run_device_stage(
         ) from exc
     stage("install finished")
     stage("starting game...")
-    adb.launch_package(package_name)
+    try:
+        adb.launch_package(package_name)
+    except Exception as exc:
+        _log.warning("launch_package failed (still try gate/pull): %s", exc)
+        stage(f"launch failed; continue prep soft path: {exc}")
     gate_timeout = float(config.PREP_GATE_TIMEOUT_SEC)
     screen_reached = "skipped"
     pull_source = "none"
@@ -149,13 +160,33 @@ def run_device_stage(
         except TimeoutError:
             screen_reached = "timeout"
             stage("ocr gate safety timeout; still attempting hotfix pull")
+        except Exception as exc:
+            screen_reached = "gate_error"
+            _log.exception("ocr gate unexpected failure: %s", exc)
+            stage(f"ocr gate failed; still attempting hotfix pull: {exc}")
     stage("pulling hotfix...")
-    pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
+    try:
+        pull_source = pull_hotfix_candidates(adb, package_name, layout["hotfix"])
+    except Exception as exc:
+        # Belt-and-suspenders: pull_hotfix_candidates should not raise.
+        pull_source = "error"
+        _log.exception("hotfix pull raised: %s", exc)
+        stage(f"hotfix pull failed (continue without): {exc}")
+        layout["hotfix"].mkdir(parents=True, exist_ok=True)
     stage(f"hotfix pull finished source={pull_source}")
-    adb.force_stop(package_name)
-    adb.ensure_uninstalled(package_name)
+    try:
+        adb.force_stop(package_name)
+    except Exception as exc:
+        _log.warning("force_stop after prep: %s", exc)
+    try:
+        adb.ensure_uninstalled(package_name)
+    except Exception as exc:
+        _log.warning("uninstall after prep: %s", exc)
     has_files = hotfix_has_content(layout["hotfix"])
-    stage(f"device stage done hotfix_files={'yes' if has_files else 'no'}")
+    stage(
+        f"device stage done hotfix_files={'yes' if has_files else 'no'} "
+        f"source={pull_source} screen={screen_reached}"
+    )
     return PrepResult(
         package_name=package_name,
         apk_stem=stem,

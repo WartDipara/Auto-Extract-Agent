@@ -177,6 +177,24 @@ def _format_gid(rows: list[sqlite3.Row]) -> str:
             f"session    {session}",
             f"adb        {adb}",
         ]
+        if _row_has(row, "hotfix_has_files"):
+            hf = str(row["hotfix_has_files"] or "").strip() or "-"
+            src = (
+                str(row["hotfix_pull_source"] or "").strip()
+                if _row_has(row, "hotfix_pull_source")
+                else ""
+            )
+            screen = (
+                str(row["screen_reached"] or "").strip()
+                if _row_has(row, "screen_reached")
+                else ""
+            )
+            detail = hf
+            if src:
+                detail = f"{detail}/{src}"
+            if screen:
+                detail = f"{detail} screen={screen}"
+            lines.append(f"hotfix     {detail}")
         if _row_has(row, "im_deliver_error"):
             derr = _clip(str(row["im_deliver_error"] or ""), _GID_ERROR_MAX)
             if derr:

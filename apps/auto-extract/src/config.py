@@ -51,6 +51,8 @@ PROMPTS_FILE = APP_ROOT / "config" / "prompts.json"
 PREP_FOREGROUND_POLL_SEC = 1.5
 PREP_CRASH_CONFIRM = 3
 PREP_BACKGROUND_CONFIRM = 2
+# After update/restart dialogs the process may exit; relaunch this many times.
+PREP_GATE_RELAUNCH_MAX = 3
 
 OPENCODE_CMD = "opencode"
 OPENCODE_SKILL = "get-game-text-skill"
@@ -80,6 +82,8 @@ ADB_CMD = "adb"
 PREP_GATE_TIMEOUT_SEC = 1200
 PREP_OCR_POLL_SEC = 3.0
 PREP_AGENT_INTERVAL_SEC = 3.0
+# Poison inbox json: after this many unexpected process failures -> rejected_.
+INBOX_PROCESS_MAX_ATTEMPTS = 5
 # Optional pin; empty = adb auto-pick. Set in .env only.
 ADB_SERIAL = (os.environ.get("ADB_SERIAL") or "").strip()
 

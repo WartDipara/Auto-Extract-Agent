@@ -40,6 +40,57 @@ def _clip_err(text: str) -> str:
     return s[: _DELIVER_ERR_MAX - 1] + "…"
 
 
+def _non_retryable_deliver_error(exc: BaseException | str) -> bool:
+    text = str(exc or "").lower()
+    keys = (
+        "missing im_chat_id",
+        "file too large",
+        "too large",
+        "20mb",
+        "unsupported",
+        "not supported",
+        "suffix",
+        "invalid file type",
+        "file type",
+    )
+    return any(k in text for k in keys)
+
+
+def _load_file_sent() -> set[str]:
+    path = Path(getattr(config, "FILE_SENT_STATE", "") or "")
+    if not path.is_file():
+        return set()
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return {str(x) for x in data if str(x).strip()}
+        if isinstance(data, dict) and isinstance(data.get("task_ids"), list):
+            return {str(x) for x in data["task_ids"] if str(x).strip()}
+    except Exception:
+        _log.exception("load file_sent state failed")
+    return set()
+
+
+def _save_file_sent(task_ids: set[str]) -> None:
+    path = Path(getattr(config, "FILE_SENT_STATE", "") or "")
+    if not path:
+        return
+    try:
+        import json
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"task_ids": sorted(task_ids)}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except Exception:
+        _log.exception("save file_sent state failed")
+
+
 class Courier:
     def __init__(self, channel: Channel):
         self._channel = channel
@@ -52,6 +103,8 @@ class Courier:
         self._deliver_fail_warned: set[str] = set()
         self._zip_timeout_warned: set[str] = set()
         self._pending_exhausted_warned: set[str] = set()
+        self._deliver_attempts: dict[str, int] = {}
+        self._file_sent_ok: set[str] = _load_file_sent()
 
     def start(self) -> None:
         self._register_lifecycle_hooks()
@@ -433,6 +486,72 @@ class Courier:
         except Exception:
             _log.exception("pending terminal notice failed file=%s", filename)
 
+    def _max_deliver_attempts(self) -> int:
+        return max(1, int(getattr(config, "DELIVER_MAX_ATTEMPTS", 10)))
+
+    def _bump_attempt(self, task_id: str) -> int:
+        n = self._deliver_attempts.get(task_id, 0) + 1
+        self._deliver_attempts[task_id] = n
+        return n
+
+    def _clear_attempt(self, task_id: str) -> None:
+        self._deliver_attempts.pop(task_id, None)
+        self._missing_chat_warned.discard(task_id)
+        self._deliver_fail_warned.discard(task_id)
+        self._zip_timeout_warned.discard(task_id)
+
+    def _remember_file_sent(self, task_id: str) -> None:
+        if task_id in self._file_sent_ok:
+            return
+        self._file_sent_ok.add(task_id)
+        _save_file_sent(self._file_sent_ok)
+
+    def _forget_file_sent(self, task_id: str) -> None:
+        if task_id not in self._file_sent_ok:
+            return
+        self._file_sent_ok.discard(task_id)
+        _save_file_sent(self._file_sent_ok)
+
+    def _abandon_delivery(
+        self,
+        done: dict,
+        *,
+        chat_id: str,
+        reason: str,
+        notify: bool = True,
+    ) -> bool:
+        task_id = str(done.get("task_id") or "")
+        table = str(done.get("_tasks_table") or config.TASKS_TABLE)
+        label = str(done.get("label") or done.get("filename") or task_id)
+        sender = str(done.get("im_sender_id") or "").strip()
+        at_ids = [sender] if sender else None
+        err = f"abandoned:{reason}"
+        if notify and chat_id:
+            try:
+                self._channel.reply_text(
+                    chat_id,
+                    f"结果回传已放弃：{label} task_id={task_id}\n{reason}",
+                    at_user_ids=at_ids,
+                )
+            except Exception:
+                _log.exception("abandon notice failed task_id=%s", task_id)
+        try:
+            _mark_delivered(task_id, table=table, deliver_error=err)
+        except Exception:
+            _log.exception("abandon mark_delivered failed task_id=%s", task_id)
+            _set_deliver_error(task_id, err, table=table)
+            return False
+        self._audit(
+            done,
+            chat_id=chat_id,
+            channel="-",
+            outcome="abandoned",
+            error=err,
+        )
+        self._clear_attempt(task_id)
+        self._forget_file_sent(task_id)
+        return True
+
     def _tick(self) -> None:
         for done in _list_undelivered():
             task_id = str(done.get("task_id") or "")
@@ -444,7 +563,7 @@ class Courier:
                 if task_id not in self._missing_chat_warned:
                     self._missing_chat_warned.add(task_id)
                     _log.warning(
-                        "skip deliver %s: missing im_chat_id (fail-closed)",
+                        "abandon deliver %s: missing im_chat_id (fail-closed)",
                         task_id,
                     )
                     self._audit(
@@ -454,14 +573,19 @@ class Courier:
                         outcome="missing_im_chat_id",
                         error="im_chat_id empty; refuse announce fallback",
                     )
-                    _set_deliver_error(
-                        task_id,
-                        "missing im_chat_id",
-                        table=table,
-                    )
+                self._abandon_delivery(
+                    done,
+                    chat_id="",
+                    reason="missing im_chat_id",
+                    notify=False,
+                )
                 continue
-            if self._deliver_done(chat_id, done):
-                self._missing_chat_warned.discard(task_id)
+            try:
+                if self._deliver_done(chat_id, done):
+                    self._clear_attempt(task_id)
+            except Exception as exc:
+                _log.exception("deliver tick failed task_id=%s", task_id)
+                _set_deliver_error(task_id, str(exc), table=table)
 
     def _audit(
         self,
@@ -493,25 +617,61 @@ class Courier:
         label = str(done.get("label") or done.get("filename") or task_id)
         sender = str(done.get("im_sender_id") or "").strip()
         at_ids = [sender] if sender else None
+        max_attempts = self._max_deliver_attempts()
+
         if st == "success":
             zip_path = Path(str(done.get("buf_done_zip") or ""))
+            if task_id in self._file_sent_ok:
+                # File already sent earlier; only retry mark / text.
+                try:
+                    self._channel.reply_text(
+                        chat_id,
+                        f"结果已发送：{zip_path.name or '-'} ({label}) "
+                        f"task_id={task_id}",
+                        at_user_ids=at_ids,
+                    )
+                    text_err = ""
+                except Exception as exc:
+                    text_err = _clip_err(str(exc))
+                try:
+                    _mark_delivered(
+                        task_id, table=table, deliver_error=text_err
+                    )
+                except Exception as exc:
+                    _log.exception(
+                        "mark after file_sent failed task_id=%s", task_id
+                    )
+                    _set_deliver_error(task_id, str(exc), table=table)
+                    return False
+                self._audit(
+                    done,
+                    chat_id=chat_id,
+                    channel="file+reply",
+                    outcome=(
+                        "file_ok_text_failed" if text_err else "ok_mark_retry"
+                    ),
+                    error=text_err,
+                )
+                self._forget_file_sent(task_id)
+                return True
+
             if not zip_path.is_file():
                 if _age_since_finish_sec(done) < config.ZIP_WAIT_SEC:
                     return False
-                # Do NOT mark delivered — bin may appear later; keep retrying.
                 if task_id not in self._zip_timeout_warned:
                     self._zip_timeout_warned.add(task_id)
                     try:
                         self._channel.reply_text(
                             chat_id,
-                            f"任务已成功，结果文件尚未就绪，将继续等待后回传："
+                            f"任务已成功，结果文件超时未就绪，停止回传："
                             f"{label} ({zip_path.name or '-'}) "
                             f"task_id={task_id}",
                             at_user_ids=at_ids,
                         )
                     except Exception as exc:
                         _log.exception(
-                            "deliver timeout notice failed task_id=%s", task_id
+                            "deliver zip-timeout notice failed task_id=%s",
+                            task_id,
                         )
                         self._audit(
                             done,
@@ -520,23 +680,22 @@ class Courier:
                             outcome="zip_missing_notice_failed",
                             error=str(exc),
                         )
-                        _set_deliver_error(task_id, str(exc), table=table)
-                        return False
-                    _set_deliver_error(
-                        task_id, "waiting for buf_done zip", table=table
-                    )
                     self._audit(
                         done,
                         chat_id=chat_id,
                         channel="reply",
-                        outcome="zip_missing_waiting",
+                        outcome="zip_missing_abandoned",
                     )
-                return False
+                return self._abandon_delivery(
+                    done,
+                    chat_id=chat_id,
+                    reason="buf_done zip missing after wait",
+                    notify=False,
+                )
 
-            file_sent = False
             try:
                 self._channel.send_file(chat_id, zip_path)
-                file_sent = True
+                self._remember_file_sent(task_id)
             except Exception as exc:
                 _log.exception("deliver file failed task_id=%s", task_id)
                 err = _clip_err(str(exc))
@@ -560,6 +719,21 @@ class Courier:
                         _log.exception(
                             "deliver failure notice failed task_id=%s", task_id
                         )
+                if _non_retryable_deliver_error(exc):
+                    return self._abandon_delivery(
+                        done,
+                        chat_id=chat_id,
+                        reason=err,
+                        notify=False,
+                    )
+                attempts = self._bump_attempt(task_id)
+                if attempts >= max_attempts:
+                    return self._abandon_delivery(
+                        done,
+                        chat_id=chat_id,
+                        reason=f"file send failed x{attempts}: {err}",
+                        notify=False,
+                    )
                 return False
 
             text_err = ""
@@ -575,28 +749,33 @@ class Courier:
                     "deliver text failed after file ok task_id=%s", task_id
                 )
 
-            if file_sent and text_err:
-                _mark_delivered(task_id, table=table, deliver_error=text_err)
+            try:
+                _mark_delivered(
+                    task_id, table=table, deliver_error=text_err
+                )
+            except Exception as exc:
+                # File already sent — do not resend; retry mark next tick.
+                _log.exception(
+                    "mark_delivered failed after file ok task_id=%s", task_id
+                )
+                _set_deliver_error(task_id, str(exc), table=table)
                 self._audit(
                     done,
                     chat_id=chat_id,
                     channel="file+reply",
-                    outcome="file_ok_text_failed",
-                    error=text_err,
+                    outcome="file_ok_mark_failed",
+                    error=str(exc),
                 )
-                self._deliver_fail_warned.discard(task_id)
-                self._zip_timeout_warned.discard(task_id)
-                return True
+                return False
 
-            _mark_delivered(task_id, table=table, deliver_error="")
             self._audit(
                 done,
                 chat_id=chat_id,
                 channel="file+reply",
-                outcome="ok",
+                outcome="file_ok_text_failed" if text_err else "ok",
+                error=text_err,
             )
-            self._deliver_fail_warned.discard(task_id)
-            self._zip_timeout_warned.discard(task_id)
+            self._forget_file_sent(task_id)
             return True
 
         err = done.get("error") or st
@@ -616,8 +795,28 @@ class Courier:
                 error=str(exc),
             )
             _set_deliver_error(task_id, str(exc), table=table)
+            if _non_retryable_deliver_error(exc):
+                return self._abandon_delivery(
+                    done,
+                    chat_id=chat_id,
+                    reason=_clip_err(str(exc)),
+                    notify=False,
+                )
+            attempts = self._bump_attempt(task_id)
+            if attempts >= max_attempts:
+                return self._abandon_delivery(
+                    done,
+                    chat_id=chat_id,
+                    reason=f"terminal text failed x{attempts}",
+                    notify=False,
+                )
             return False
-        _mark_delivered(task_id, table=table, deliver_error="")
+        try:
+            _mark_delivered(task_id, table=table, deliver_error="")
+        except Exception as exc:
+            _log.exception("mark terminal delivered failed task_id=%s", task_id)
+            _set_deliver_error(task_id, str(exc), table=table)
+            return False
         self._audit(
             done,
             chat_id=chat_id,

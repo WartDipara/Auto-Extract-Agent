@@ -20,7 +20,8 @@ _DATA_EXCLUDE_NAMES = {
     "crashsdk",
     "filedownloader",
 }
-# ShadowPluginManager / ShadowPlugin_* 等一律不�?_DATA_EXCLUDE_PREFIXES = ("ShadowPlugin",)
+# ShadowPluginManager / ShadowPlugin_* directories under /data/data/.../files
+_DATA_EXCLUDE_PREFIXES = ("ShadowPlugin",)
 
 # Android/data/.../files exclusions
 _SDCARD_EXCLUDE_NAMES = {
@@ -40,9 +41,16 @@ def _excluded(name: str, *, sdcard: bool) -> bool:
 def hotfix_has_content(hotfix_dir: Path) -> bool:
     if not hotfix_dir.is_dir():
         return False
-    for path in hotfix_dir.rglob("*"):
-        if path.is_file() and path.stat().st_size > 0:
-            return True
+    try:
+        for path in hotfix_dir.rglob("*"):
+            try:
+                if path.is_file() and path.stat().st_size > 0:
+                    return True
+            except OSError:
+                continue
+    except OSError as exc:
+        _log.warning("hotfix_has_content failed under %s: %s", hotfix_dir, exc)
+        return False
     return False
 
 
@@ -55,37 +63,59 @@ def pull_hotfix_candidates(adb: AdbDevice, package: str, hotfix_dir: Path) -> st
     Pull both device locations into hotfix_dir subfolders:
       internal_storage/  <- /data/data/<pkg>/files
       sdcard/            <- /sdcard/Android/data/<pkg>/files
-    Returns pull_source: internal_storage | sdcard | internal_storage+sdcard | none
+    Returns pull_source: internal_storage | sdcard | internal_storage+sdcard | none | error
+    Never raises - missing hotfix is a soft outcome for the pipeline.
     """
-    rmtree_force(hotfix_dir)
-    hotfix_dir.mkdir(parents=True, exist_ok=True)
-    sources: list[str] = []
+    try:
+        rmtree_force(hotfix_dir)
+        hotfix_dir.mkdir(parents=True, exist_ok=True)
+        sources: list[str] = []
 
-    internal_dir = hotfix_dir / _INTERNAL_SUBDIR
-    internal_dir.mkdir(parents=True, exist_ok=True)
-    print("pulling hotfix from /data/data/.../files -> internal_storage/", flush=True)
-    if _try_pull_run_as(adb, package, internal_dir) and hotfix_has_content(internal_dir):
-        sources.append(_INTERNAL_SUBDIR)
-        print("hotfix pulled from data/data -> internal_storage/", flush=True)
-    else:
-        rmtree_force(internal_dir)
+        internal_dir = hotfix_dir / _INTERNAL_SUBDIR
+        internal_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            "pulling hotfix from /data/data/.../files -> internal_storage/",
+            flush=True,
+        )
+        if (
+            _try_pull_run_as(adb, package, internal_dir)
+            and hotfix_has_content(internal_dir)
+        ):
+            sources.append(_INTERNAL_SUBDIR)
+            print("hotfix pulled from data/data -> internal_storage/", flush=True)
+        else:
+            rmtree_force(internal_dir)
 
-    sdcard_dir = hotfix_dir / _SDCARD_SUBDIR
-    sdcard_dir.mkdir(parents=True, exist_ok=True)
-    print("pulling hotfix from Android/data/.../files -> sdcard/", flush=True)
-    if _try_pull_android_data(adb, package, sdcard_dir) and hotfix_has_content(sdcard_dir):
-        sources.append(_SDCARD_SUBDIR)
-        print("hotfix pulled from Android/data -> sdcard/", flush=True)
-    else:
-        rmtree_force(sdcard_dir)
+        sdcard_dir = hotfix_dir / _SDCARD_SUBDIR
+        sdcard_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            "pulling hotfix from Android/data/.../files -> sdcard/",
+            flush=True,
+        )
+        if (
+            _try_pull_android_data(adb, package, sdcard_dir)
+            and hotfix_has_content(sdcard_dir)
+        ):
+            sources.append(_SDCARD_SUBDIR)
+            print("hotfix pulled from Android/data -> sdcard/", flush=True)
+        else:
+            rmtree_force(sdcard_dir)
 
-    if not sources:
-        print("hotfix pull empty", flush=True)
-        _log.warning("no hotfix content pulled for %s", package)
-        return "none"
-    result = "+".join(sources)
-    _log.info("hotfix pull sources=%s", result)
-    return result
+        if not sources:
+            print("hotfix pull empty", flush=True)
+            _log.warning("no hotfix content pulled for %s", package)
+            return "none"
+        result = "+".join(sources)
+        _log.info("hotfix pull sources=%s", result)
+        return result
+    except Exception as exc:
+        _log.exception("hotfix pull unexpected failure package=%s: %s", package, exc)
+        print(f"hotfix pull failed (continue without): {exc}", flush=True)
+        try:
+            hotfix_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return "error"
 
 
 def _try_pull_run_as(adb: AdbDevice, package: str, hotfix_dir: Path) -> bool:

@@ -107,10 +107,26 @@ class ForegroundWatch:
     def bring_back(self) -> None:
         print(f"foreground watch: bring back {self._package}", flush=True)
         _log.warning("package backgrounded; bringing to foreground %s", self._package)
-        self._adb.bring_to_foreground(self._package)
+        try:
+            self._adb.bring_to_foreground(self._package)
+        except Exception as exc:
+            _log.warning(
+                "bring_to_foreground failed package=%s: %s", self._package, exc
+            )
         with self._lock:
             # Require a fresh background streak before monkey again.
             self._background_hits = 0
+
+    def reset(self) -> None:
+        """Clear debounce counters and restart watch thread after expected relaunch."""
+        with self._lock:
+            self._crash_hits = 0
+            self._background_hits = 0
+            self._state = ForegroundState.FOREGROUND
+        alive = self._thread is not None and self._thread.is_alive()
+        if not alive:
+            self._thread = None
+            self.start()
 
     def apply(self, state: ForegroundState | None = None) -> str | None:
         """

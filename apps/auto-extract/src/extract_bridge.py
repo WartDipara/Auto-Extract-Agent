@@ -24,7 +24,8 @@ _log = logging.getLogger(__name__)
 
 _SEP = "=" * 60
 
-# Serial A only: current task workspace root for this module.
+# Set only inside invoke_extract_agent (same-thread extract window).
+# Archive / other stages MUST pass task_root explicitly — never rely on this.
 _task_root: Path | None = None
 
 
@@ -34,13 +35,21 @@ def _require_task_root() -> Path:
     return _task_root
 
 
-def opencode_output_csv() -> Path:
-    return task_layout(_require_task_root())["tests_csv"].resolve()
+def _resolve_task_root(task_root: Path | str | None = None) -> Path:
+    if task_root is not None:
+        return Path(task_root).resolve()
+    return _require_task_root()
 
 
-def result_csv_path(apk_name: str) -> Path:
+def opencode_output_csv(task_root: Path | str | None = None) -> Path:
+    return task_layout(_resolve_task_root(task_root))["tests_csv"].resolve()
+
+
+def result_csv_path(
+    apk_name: str, *, task_root: Path | str | None = None
+) -> Path:
     _ = apk_name
-    return opencode_output_csv()
+    return opencode_output_csv(task_root)
 
 
 def _log_path_for_apk(apk_name: str) -> Path:
@@ -89,8 +98,13 @@ def _open_task_log(apk_name: str):
         return None, None
 
 
-def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
-    layout = task_layout(_require_task_root())
+def write_decrypt_fail_csv(
+    apk_name: str,
+    reason: str = "",
+    *,
+    task_root: Path | str | None = None,
+) -> Path:
+    layout = task_layout(_resolve_task_root(task_root))
     layout["outputs"].mkdir(parents=True, exist_ok=True)
     csv_path = layout["tests_csv"]
     detail = reason or f"超时，超过 {config.AGENT_TIMEOUT_SEC} 秒，进程已被终止"
@@ -102,8 +116,13 @@ def write_decrypt_fail_csv(apk_name: str, reason: str = "") -> Path:
     return csv_path
 
 
-def write_abnormal_exit_csv(apk_name: str, reason: str = "") -> Path:
-    layout = task_layout(_require_task_root())
+def write_abnormal_exit_csv(
+    apk_name: str,
+    reason: str = "",
+    *,
+    task_root: Path | str | None = None,
+) -> Path:
+    layout = task_layout(_resolve_task_root(task_root))
     layout["outputs"].mkdir(parents=True, exist_ok=True)
     csv_path = layout["tests_csv"]
     detail = reason or "opencode 进程已结束但未产出 CSV"
@@ -115,20 +134,26 @@ def write_abnormal_exit_csv(apk_name: str, reason: str = "") -> Path:
     return csv_path
 
 
-def csv_has_content(apk_name: str) -> bool:
-    csv_path = result_csv_path(apk_name)
+def csv_has_content(
+    apk_name: str, *, task_root: Path | str | None = None
+) -> bool:
+    csv_path = result_csv_path(apk_name, task_root=task_root)
     if not csv_path.is_file():
         return False
     text = csv_path.read_text(encoding="utf-8-sig", errors="replace").strip()
     return bool(text)
 
 
-def ensure_csv_after_agent(apk_name: str) -> Path:
+def ensure_csv_after_agent(
+    apk_name: str, *, task_root: Path | str | None = None
+) -> Path:
     """Ensure tests.csv exists for archive; invent abnormal-exit row if missing."""
-    if csv_has_content(apk_name):
-        return result_csv_path(apk_name)
+    if csv_has_content(apk_name, task_root=task_root):
+        return result_csv_path(apk_name, task_root=task_root)
     return write_abnormal_exit_csv(
-        apk_name, reason="opencode finished without CSV"
+        apk_name,
+        reason="opencode finished without CSV",
+        task_root=task_root,
     )
 
 
@@ -746,9 +771,14 @@ def invoke_extract_agent(
     )
 
 
-def wait_for_csv(apk_name: str, timeout_sec: float | None = None) -> tuple[Path, str]:
+def wait_for_csv(
+    apk_name: str,
+    timeout_sec: float | None = None,
+    *,
+    task_root: Path | str | None = None,
+) -> tuple[Path, str]:
     deadline = time.monotonic() + (timeout_sec or config.AGENT_TIMEOUT_SEC)
-    csv_path = result_csv_path(apk_name)
+    csv_path = result_csv_path(apk_name, task_root=task_root)
     while time.monotonic() < deadline:
         if csv_path.is_file():
             text = csv_path.read_text(encoding="utf-8-sig", errors="replace").strip()

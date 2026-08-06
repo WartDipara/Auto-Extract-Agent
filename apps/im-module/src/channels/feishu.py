@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
@@ -90,9 +91,11 @@ class FeishuChannel:
         )
         self._on_message: MessageHandler | None = None
         self._seen = _SeenIds()
+        self._stop = threading.Event()
 
     def start(self, on_message: MessageHandler) -> None:
         self._on_message = on_message
+        self._stop.clear()
 
         # Official: builder("", "") for long connection (no encrypt/token).
         event_handler = (
@@ -100,17 +103,39 @@ class FeishuChannel:
             .register_p2_im_message_receive_v1(self._dispatch)
             .build()
         )
-        cli = lark.ws.Client(
-            self._app_id,
-            self._app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
-        )
+        reconnect_sec = 3.0
+        try:
+            import config as _cfg
+
+            reconnect_sec = float(getattr(_cfg, "FEISHU_RECONNECT_SEC", 3.0))
+        except Exception:
+            reconnect_sec = 3.0
+
         _log.info("feishu websocket starting")
-        cli.start()
+        while not self._stop.is_set():
+            cli = lark.ws.Client(
+                self._app_id,
+                self._app_secret,
+                event_handler=event_handler,
+                log_level=lark.LogLevel.INFO,
+            )
+            try:
+                cli.start()
+            except KeyboardInterrupt:
+                break
+            except Exception:
+                _log.exception("feishu websocket failed")
+            if self._stop.is_set():
+                break
+            _log.warning(
+                "feishu websocket disconnected; retry in %ss", reconnect_sec
+            )
+            if self._stop.wait(reconnect_sec):
+                break
+        _log.info("feishu websocket stopped")
 
     def stop(self) -> None:
-        return
+        self._stop.set()
 
     def _dispatch(self, data: lark.im.v1.P2ImMessageReceiveV1) -> None:
         try:

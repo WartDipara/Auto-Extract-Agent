@@ -186,7 +186,7 @@ def _device_loop() -> None:
             )
             with stage_scope("device"):
                 task_root = config.WORKSPACE_ROOT / apk.stem
-                run_device_stage(
+                prep = run_device_stage(
                     task_root=task_root,
                     apk_path=apk,
                     signed_apk=signed,
@@ -197,6 +197,9 @@ def _device_loop() -> None:
                 task.task_id,
                 status="device_done",
                 adb_serial=serial,
+                hotfix_has_files="yes" if prep.hotfix_has_files else "no",
+                hotfix_pull_source=prep.pull_source or "none",
+                screen_reached=prep.screen_reached or "",
             )
             if updated:
                 pq.put_extract(updated)
@@ -275,9 +278,11 @@ def _archive_loop() -> None:
             task_key = Path(filename).stem
             label = task.label or ""
             with stage_scope("archive"):
-                ensure_csv_after_agent(filename)
+                ensure_csv_after_agent(filename, task_root=task_root)
                 csv_path, text = wait_for_csv(
-                    filename, timeout_sec=config.CSV_GRACE_SEC
+                    filename,
+                    timeout_sec=config.CSV_GRACE_SEC,
+                    task_root=task_root,
                 )
                 status = classify_csv(text)
                 body_text, session_id = clean_result_csv(text)
@@ -315,6 +320,7 @@ def _archive_loop() -> None:
                     queue_manager.append_session_record(updated)
                 layout = task_layout(task_root)
                 export_path = layout["opencode_export"]
+                prep_task = updated or task
                 meta = {
                     "task_id": task.task_id,
                     "task_key": task_key,
@@ -326,6 +332,9 @@ def _archive_loop() -> None:
                     "error": err_line,
                     "result_csv": str(archived),
                     "opencode_export": str(export_path) if export_path.is_file() else "",
+                    "hotfix_has_files": prep_task.hotfix_has_files or "",
+                    "hotfix_pull_source": prep_task.hotfix_pull_source or "",
+                    "screen_reached": prep_task.screen_reached or "",
                     "finished_at": utc_now(),
                 }
                 if error_info is not None:
@@ -344,36 +353,50 @@ def _archive_loop() -> None:
 
 def recover_and_enqueue() -> None:
     """Apply recovery matrix and feed stage queues from DB active rows."""
-    for task in task_store.list_active():
-        status = task.status
-        if status == "queued":
-            pq.put_download(task)
-        elif status == "downloaded":
-            if _apk_path(task) is None:
-                queue_manager.update_task(task.task_id, status="queued", filename="")
-                fresh = queue_manager.get_task(task.task_id)
-                if fresh:
-                    pq.put_download(fresh)
-            else:
-                pq.put_patch(task)
-        elif status == "patched":
-            pq.put_device(task)
-        elif status == "on_device":
-            queue_manager.update_task(
-                task.task_id,
-                status="failed",
-                error="PIPELINE_INTERRUPTED:on_device",
+    try:
+        active = list(task_store.list_active())
+    except Exception:
+        _log.exception("recover: list_active failed")
+        return
+    for task in active:
+        try:
+            status = task.status
+            if status == "queued":
+                pq.put_download(task)
+            elif status == "downloaded":
+                if _apk_path(task) is None:
+                    queue_manager.update_task(
+                        task.task_id, status="queued", filename=""
+                    )
+                    fresh = queue_manager.get_task(task.task_id)
+                    if fresh:
+                        pq.put_download(fresh)
+                else:
+                    pq.put_patch(task)
+            elif status == "patched":
+                pq.put_device(task)
+            elif status == "on_device":
+                queue_manager.update_task(
+                    task.task_id,
+                    status="failed",
+                    error="PIPELINE_INTERRUPTED:on_device",
+                )
+            elif status == "device_done":
+                pq.put_extract(task)
+            elif status == "on_extract":
+                queue_manager.update_task(
+                    task.task_id,
+                    status="failed",
+                    error="PIPELINE_INTERRUPTED:on_extract",
+                )
+            elif status == "extract_done":
+                pq.put_archive(task)
+        except Exception:
+            _log.exception(
+                "recover: skip task_id=%s status=%s",
+                getattr(task, "task_id", "?"),
+                getattr(task, "status", "?"),
             )
-        elif status == "device_done":
-            pq.put_extract(task)
-        elif status == "on_extract":
-            queue_manager.update_task(
-                task.task_id,
-                status="failed",
-                error="PIPELINE_INTERRUPTED:on_extract",
-            )
-        elif status == "extract_done":
-            pq.put_archive(task)
 
 
 def start_pipeline() -> None:
@@ -392,7 +415,12 @@ def start_pipeline() -> None:
             ).start()
         adb_pool, _ = _pools()
         # Extra waiters are fine: AdbPool serializes by device count.
-        device_workers = max(2, len(adb_pool.refresh()) or 1, config.OPENCODE_SLOTS)
+        try:
+            online = len(adb_pool.refresh()) or 1
+        except Exception:
+            _log.exception("adb refresh at start failed; using fallback worker count")
+            online = 1
+        device_workers = max(2, online, config.OPENCODE_SLOTS)
         for i in range(device_workers):
             threading.Thread(
                 target=_device_loop, name=f"device-{i}", daemon=True
@@ -404,12 +432,19 @@ def start_pipeline() -> None:
         threading.Thread(
             target=_archive_loop, name="archive-0", daemon=True
         ).start()
-        _write_heartbeat()
+        try:
+            _write_heartbeat()
+        except Exception:
+            _log.exception("initial heartbeat write failed")
         threading.Thread(
             target=_heartbeat_loop, name="heartbeat", daemon=True
         ).start()
-        recover_and_enqueue()
+        # Mark started before recover so a recover failure cannot respawn workers.
         _started = True
+        try:
+            recover_and_enqueue()
+        except Exception:
+            _log.exception("recover_and_enqueue failed after workers started")
         _log.info(
             "pipeline started download=%s patch=%s device=%s opencode=%s",
             config.DOWNLOAD_WORKERS,

@@ -70,6 +70,9 @@ def open_store() -> None:
                 session_id TEXT NOT NULL DEFAULT '',
                 buf_done_zip TEXT NOT NULL DEFAULT '',
                 adb_serial TEXT NOT NULL DEFAULT '',
+                hotfix_has_files TEXT NOT NULL DEFAULT '',
+                hotfix_pull_source TEXT NOT NULL DEFAULT '',
+                screen_reached TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 finished_at TEXT NOT NULL DEFAULT '',
@@ -113,6 +116,18 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             f"ALTER TABLE {table} ADD COLUMN im_deliver_error TEXT NOT NULL DEFAULT ''"
         )
+    if "hotfix_has_files" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN hotfix_has_files TEXT NOT NULL DEFAULT ''"
+        )
+    if "hotfix_pull_source" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN hotfix_pull_source TEXT NOT NULL DEFAULT ''"
+        )
+    if "screen_reached" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN screen_reached TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _require_conn() -> sqlite3.Connection:
@@ -144,6 +159,9 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         session_id=row["session_id"] or "",
         buf_done_zip=row["buf_done_zip"] or "",
         adb_serial=row["adb_serial"] or "",
+        hotfix_has_files=_row_get(row, "hotfix_has_files"),
+        hotfix_pull_source=_row_get(row, "hotfix_pull_source"),
+        screen_reached=_row_get(row, "screen_reached"),
         created_at=row["created_at"] or "",
         updated_at=row["updated_at"] or "",
         finished_at=row["finished_at"] or "",
@@ -203,9 +221,10 @@ def insert_task(task: Task) -> Task:
                 INSERT INTO {table} (
                     task_id, url, source_file, filename, label, labels_json,
                     status, error, result_csv, session_id, buf_done_zip, adb_serial,
+                    hotfix_has_files, hotfix_pull_source, screen_reached,
                     created_at, updated_at, finished_at, im_delivered_at, im_chat_id,
                     im_sender_id, im_deliver_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -220,6 +239,9 @@ def insert_task(task: Task) -> Task:
                     task.session_id or "",
                     task.buf_done_zip or "",
                     task.adb_serial or "",
+                    task.hotfix_has_files or "",
+                    task.hotfix_pull_source or "",
+                    task.screen_reached or "",
                     task.created_at,
                     task.updated_at,
                     task.finished_at or "",
@@ -249,6 +271,9 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
         "session_id",
         "buf_done_zip",
         "adb_serial",
+        "hotfix_has_files",
+        "hotfix_pull_source",
+        "screen_reached",
         "finished_at",
         "im_delivered_at",
         "im_chat_id",
@@ -285,7 +310,8 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                 UPDATE {table} SET
                     url=?, source_file=?, filename=?, label=?, labels_json=?,
                     status=?, error=?, result_csv=?, session_id=?, buf_done_zip=?,
-                    adb_serial=?, updated_at=?, finished_at=?, im_delivered_at=?,
+                    adb_serial=?, hotfix_has_files=?, hotfix_pull_source=?,
+                    screen_reached=?, updated_at=?, finished_at=?, im_delivered_at=?,
                     im_chat_id=?, im_sender_id=?, im_deliver_error=?
                 WHERE task_id=?
                 """,
@@ -301,6 +327,9 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     task.session_id or "",
                     task.buf_done_zip or "",
                     task.adb_serial or "",
+                    task.hotfix_has_files or "",
+                    task.hotfix_pull_source or "",
+                    task.screen_reached or "",
                     task.updated_at,
                     task.finished_at or "",
                     task.im_delivered_at or "",

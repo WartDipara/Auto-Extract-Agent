@@ -49,11 +49,20 @@ def wait_until_entry_screen(
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ui-decide")
     decide_future: Future | None = None
     try:
-        if not ping_model():
+        try:
+            if not ping_model():
+                return "ai_unavailable"
+        except Exception as exc:
+            _log.warning("ocr gate ping_model failed: %s", exc)
             return "ai_unavailable"
 
         session = UiAgentSession(adb, thread_id=thread_id)
-        session.bootstrap()
+        try:
+            session.bootstrap()
+        except Exception as exc:
+            _log.exception("ocr gate bootstrap failed: %s", exc)
+            print(f"ocr gate bootstrap failed: {exc}", flush=True)
+            return "gate_error"
 
         deadline = time.monotonic() + timeout_sec
         shot_dir = Path(tempfile.mkdtemp(prefix="ocr_gate_"))
@@ -61,6 +70,8 @@ def wait_until_entry_screen(
         last_decide_at = 0.0
         note = ""
         n = 0
+        relaunches = 0
+        relaunch_max = max(0, int(getattr(config, "PREP_GATE_RELAUNCH_MAX", 3)))
         print(
             f"ocr gate watching screen (small_agent, interval={agent_interval_sec}s)...",
             flush=True,
@@ -68,14 +79,60 @@ def wait_until_entry_screen(
 
         while time.monotonic() < deadline:
             n += 1
-            action = watch.apply(watch.poll())
+            try:
+                action = watch.apply(watch.poll())
+            except Exception as exc:
+                _log.warning("ocr gate watch poll failed: %s", exc)
+                time.sleep(poll_sec)
+                continue
             if action == "crash":
+                # Update dialogs often force-quit the process; relaunch and continue.
+                if relaunches < relaunch_max:
+                    relaunches += 1
+                    print(
+                        f"ocr gate: process gone; relaunch "
+                        f"{relaunches}/{relaunch_max} {package_name}",
+                        flush=True,
+                    )
+                    _log.warning(
+                        "ocr gate relaunch after process gap package=%s n=%s/%s",
+                        package_name,
+                        relaunches,
+                        relaunch_max,
+                    )
+                    try:
+                        adb.force_stop(package_name)
+                    except Exception:
+                        pass
+                    time.sleep(1.0)
+                    try:
+                        adb.launch_package(package_name)
+                    except Exception as exc:
+                        _log.warning("ocr gate relaunch launch failed: %s", exc)
+                    time.sleep(2.0)
+                    try:
+                        running = adb.is_package_running(package_name)
+                    except Exception:
+                        running = False
+                    if running:
+                        watch.reset()
+                        decide_future = None
+                        last_fp = ""
+                        last_decide_at = 0.0
+                        note = (
+                            "game process restarted after update/exit; "
+                            "continue privacy/download/entry flow"
+                        )
+                        continue
+                    _log.error(
+                        "ocr gate relaunch failed; package still not running"
+                    )
                 print("ocr gate: crash detected", flush=True)
                 return "crash"
             if action == "brought_back":
                 note = "just brought back from external/background UI"
 
-            # Prior decide still thinking â†?skip this tick, never start another.
+            # Prior decide still running: skip this tick, never start another.
             if decide_future is not None and not decide_future.done():
                 if n == 1 or n % 5 == 0:
                     print(f"ocr gate skip: decide still running poll={n}", flush=True)
@@ -111,9 +168,15 @@ def wait_until_entry_screen(
                 continue
 
             shot = shot_dir / f"gate_{n}.png"
-            adb.screencap(shot)
-            space = resolve_screen_coord_space(adb, shot)
-            items = ocr_image(shot, device_w=space.tap_w, device_h=space.tap_h)
+            try:
+                adb.screencap(shot)
+                space = resolve_screen_coord_space(adb, shot)
+                items = ocr_image(shot, device_w=space.tap_w, device_h=space.tap_h)
+            except Exception as exc:
+                _log.warning("ocr gate screencap/ocr failed poll=%s: %s", n, exc)
+                print(f"ocr gate frame error poll={n}: {exc}", flush=True)
+                time.sleep(poll_sec)
+                continue
             blob = texts_joined(items)
             fp = hashlib.sha1(blob.encode("utf-8", errors="replace")).hexdigest()
             _log.info(
@@ -144,7 +207,10 @@ def wait_until_entry_screen(
             f"OCR gate timeout after {timeout_sec}s; entry screen not reached"
         )
     finally:
-        watch.stop()
+        try:
+            watch.stop()
+        except Exception:
+            pass
         if decide_future is not None and not decide_future.done():
             print("ocr gate waiting in-flight decide to finish...", flush=True)
             try:

@@ -22,6 +22,10 @@ class Task:
     session_id: str = ""
     buf_done_zip: str = ""
     adb_serial: str = ""
+    # Prep soft outcomes: missing hotfix must not fail the task.
+    hotfix_has_files: str = ""  # "yes" | "no" | ""
+    hotfix_pull_source: str = ""
+    screen_reached: str = ""
     created_at: str = ""
     updated_at: str = ""
     finished_at: str = ""

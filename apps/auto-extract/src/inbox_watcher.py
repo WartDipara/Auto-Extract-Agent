@@ -16,6 +16,8 @@ _log = logging.getLogger(__name__)
 _SETTLE_SEC = 0.4
 _RESCAN_SEC = 3.0
 _PROCESSING = set()
+_FAIL_COUNTS: dict[str, int] = {}
+_FAIL_LOCK = threading.Lock()
 
 
 def _move_aside(path: Path, *, prefix: str = "") -> None:
@@ -37,6 +39,22 @@ def _read_json(path: Path) -> dict | None:
     return data
 
 
+def _fail_budget() -> int:
+    return max(1, int(getattr(config, "INBOX_PROCESS_MAX_ATTEMPTS", 5)))
+
+
+def _note_process_failure(key: str) -> int:
+    with _FAIL_LOCK:
+        n = _FAIL_COUNTS.get(key, 0) + 1
+        _FAIL_COUNTS[key] = n
+        return n
+
+
+def _clear_process_failure(key: str) -> None:
+    with _FAIL_LOCK:
+        _FAIL_COUNTS.pop(key, None)
+
+
 def _process_file(path: Path):
     key = str(path.resolve())
     if key in _PROCESSING:
@@ -50,11 +68,14 @@ def _process_file(path: Path):
     try:
         data = _read_json(path)
         if data is None:
+            _clear_process_failure(key)
             _move_aside(path, prefix="rejected_")
             return
         ok = dispatch(data, path)
         if not path.is_file():
+            _clear_process_failure(key)
             return
+        _clear_process_failure(key)
         if ok:
             _log.info("inbox accepted: %s", path.name)
             _move_aside(path)
@@ -63,11 +84,28 @@ def _process_file(path: Path):
             _move_aside(path, prefix="rejected_")
     except json.JSONDecodeError as exc:
         _log.error("invalid json %s: %s", path.name, exc)
+        _clear_process_failure(key)
         if path.is_file():
             _move_aside(path, prefix="rejected_")
     except Exception:
-        # Leave file in inbox for rescan; do not swallow into processed.
-        _log.exception("inbox process failed (kept for retry): %s", path.name)
+        hits = _note_process_failure(key)
+        budget = _fail_budget()
+        if hits >= budget and path.is_file():
+            _log.exception(
+                "inbox process failed %s/%s; rejecting poison file: %s",
+                hits,
+                budget,
+                path.name,
+            )
+            _clear_process_failure(key)
+            _move_aside(path, prefix="rejected_")
+        else:
+            _log.exception(
+                "inbox process failed (kept for retry %s/%s): %s",
+                hits,
+                budget,
+                path.name,
+            )
     finally:
         _PROCESSING.discard(key)
 

@@ -654,7 +654,6 @@ def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
     c._tick()
-    assert ch.texts == []
     assert ch.files == []
     conn = sqlite3.connect(str(db))
     row = conn.execute(
@@ -662,7 +661,8 @@ def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):
         ("t-orphan",),
     ).fetchone()
     conn.close()
-    assert (row[0] or "") == ""
+    assert row[0]
+    assert "abandoned" in (row[1] or "")
     assert "im_chat_id" in (row[1] or "")
     assert audit.is_file()
     assert "missing_im_chat_id" in audit.read_text(encoding="utf-8")

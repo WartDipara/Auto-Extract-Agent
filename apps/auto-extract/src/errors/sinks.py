@@ -56,11 +56,30 @@ class QueueSink:
         task_id = getattr(task, "task_id", None) or ctx.get("task_id")
         if not task_id:
             return
-        queue_manager.update_task(
-            task_id,
-            status=info.status,
-            error=info.to_line(),
-        )
+        try:
+            queue_manager.update_task(
+                task_id,
+                status=info.status,
+                error=info.to_line(),
+            )
+        except Exception:
+            # Keep worker loops alive; leave an operational breadcrumb.
+            _log.exception(
+                "QueueSink update_task failed task_id=%s status=%s error=%s",
+                task_id,
+                info.status,
+                info.to_line(),
+            )
+            try:
+                path = config.SERVICE_LOG
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("a", encoding="utf-8") as fp:
+                    fp.write(
+                        f"QueueSinkFail task={task_id} status={info.status} "
+                        f"{info.to_line()}\n"
+                    )
+            except Exception:
+                _log.exception("QueueSink service.log write failed")
 
 
 class MetaSink:

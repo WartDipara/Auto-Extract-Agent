@@ -12,11 +12,12 @@ PING_PROMPT = "Reply with exactly one token: OK or pong. No other text."
 TASK_BOOTSTRAP = """工作说明（请记住，后续轮次只追加当前画面 OCR）：
 1. 每轮会给你编号 OCR 列表：id / text / x / y（坐标已对齐 adb tap）。
 2. 你的任务：同意隐私、推进资源下载；到达登录/开始游戏/选服时调用 done。
-3. 工具（每轮只用一个）：
+3. 若出现「更新完成需手动重启」「请退出后重新启动」等提示，点击「确定/重启/知道了」即可；进程退出后由宿主重新拉起，你继续后续引导。
+4. 工具（每轮只用一个）：
    - tap_item(item_id)：点击对应 OCR 项中心
    - wait：下载中、动画中、OCR 过少/看不清时等待
    - done(scene)：scene 只能是 login / start_game / server_select / entry
-4. 不要点「不同意」「拒绝」；不要编造不存在的 id。
+5. 不要点「不同意」「拒绝」；不要编造不存在的 id。
 请简短确认你已理解（一句话即可，不要调用工具）。"""
 
 
