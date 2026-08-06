@@ -580,8 +580,68 @@ def test_announce_broadcasts_to_all_known_chats(tmp_path, monkeypatch):
     assert all(t == "fault-notice" for _, t in ch.broadcasts)
 
 
-def test_signal_shutdown_defers_offline_announce(tmp_path, monkeypatch):
-    """SIGINT must not HTTP-broadcast; stop()/finally does multi-group offline."""
+def test_graceful_stop_announces_offline_once(tmp_path, monkeypatch):
+    """stop() closes channel first, then broadcasts offline to all known chats."""
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "announce_chat"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    from announce_chat import add_announce_chat
+
+    class _FakeChannel:
+        def __init__(self):
+            self.broadcasts: list[tuple[str, str]] = []
+            self.stop_calls = 0
+            self.events: list[str] = []
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            self.stop_calls += 1
+            self.events.append("stop")
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            raise AssertionError("lifecycle should use broadcast_text")
+
+        def broadcast_text(self, chat_id, text):
+            self.events.append("broadcast")
+            self.broadcasts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    state = tmp_path / "announce.json"
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", state)
+    add_announce_chat(state, "group:A")
+    add_announce_chat(state, "group:B")
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    c._register_lifecycle_hooks()
+
+    # Stream still up: shutdown alone must not HTTP-broadcast.
+    c._request_shutdown()
+    assert ch.stop_calls == 1
+    assert ch.broadcasts == []
+    assert c._offline_announced is False
+
+    c.stop()
+    assert c._offline_announced is True
+    assert {cid for cid, _ in ch.broadcasts} == {"group:A", "group:B"}
+    assert "stop" in ch.events
+    assert ch.events.index("stop") < ch.events.index("broadcast")
+    # Idempotent.
+    c.stop()
+    assert len(ch.broadcasts) == 2
+
+
+def test_start_keyboardinterrupt_triggers_graceful_stop(tmp_path, monkeypatch):
     for p in (str(_IM_SRC),):
         if p in sys.path:
             sys.path.remove(p)
@@ -599,13 +659,13 @@ def test_signal_shutdown_defers_offline_announce(tmp_path, monkeypatch):
             self.stop_calls = 0
 
         def start(self, on_message):
-            pass
+            raise KeyboardInterrupt
 
         def stop(self):
             self.stop_calls += 1
 
         def reply_text(self, chat_id, text, *, at_user_ids=None):
-            raise AssertionError("lifecycle should use broadcast_text")
+            pass
 
         def broadcast_text(self, chat_id, text):
             self.broadcasts.append((chat_id, text))
@@ -616,34 +676,125 @@ def test_signal_shutdown_defers_offline_announce(tmp_path, monkeypatch):
     state = tmp_path / "announce.json"
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", state)
+    monkeypatch.setattr(config, "pick_bot_online", lambda: "online")
+    monkeypatch.setattr(config, "pick_bot_offline", lambda: "offline")
+    monkeypatch.setattr(config, "OPS_TEMPLATE", "ops")
     add_announce_chat(state, "group:A")
-    add_announce_chat(state, "group:B")
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
-    c._register_lifecycle_hooks()
-
-    # Simulate first SIGINT: request shutdown only.
-    c._shutdown_requested = False
-    try:
-        # Call the registered behavior directly.
-        c._request_shutdown()
-    except Exception:
-        raise
-    assert ch.stop_calls == 1
-    assert ch.broadcasts == []
-    assert c._offline_announced is False
-
-    # Repeated shutdown request is fine.
-    c._request_shutdown()
-    assert ch.stop_calls == 2
-
-    # finally/stop path broadcasts offline to every learned group once.
-    c.stop()
+    c.start()
+    assert ch.stop_calls >= 1
     assert c._offline_announced is True
-    assert {cid for cid, _ in ch.broadcasts} == {"group:A", "group:B"}
-    c.stop()
-    assert len(ch.broadcasts) == 2
+    assert any(t == "offline" for _, t in ch.broadcasts)
 
+
+def test_dingtalk_stream_stop_closes_without_keyboardinterrupt(monkeypatch):
+    """channel.stop() must unwind the stream loop (not only KeyboardInterrupt)."""
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in (
+        "config",
+        "channels.dingtalk.channel",
+        "channels.dingtalk.openapi",
+    ):
+        sys.modules.pop(name, None)
+
+    import asyncio
+    import threading
+    import time
+
+    import channels.dingtalk.channel as ch_mod
+
+    class _FakeWs:
+        def __init__(self):
+            self.closed = False
+            self._q: asyncio.Queue = asyncio.Queue()
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            item = await self._q.get()
+            if item is None:
+                raise StopAsyncIteration
+            return item
+
+        async def close(self):
+            self.closed = True
+            await self._q.put(None)
+
+        async def ping(self):
+            return
+
+    class _FakeConnectCM:
+        def __init__(self, ws):
+            self._ws = ws
+
+        async def __aenter__(self):
+            return self._ws
+
+        async def __aexit__(self, *args):
+            return False
+
+    ws = _FakeWs()
+
+    class _FakeClient:
+        def __init__(self):
+            self.websocket = None
+            self._pre = False
+
+        def pre_start(self):
+            self._pre = True
+
+        def register_callback_handler(self, _topic, _handler):
+            return None
+
+        def open_connection(self):
+            return {"endpoint": "ws://example", "ticket": "t"}
+
+        async def keepalive(self, _websocket):
+            while True:
+                await asyncio.sleep(60)
+
+        async def background_task(self, _msg):
+            return
+
+    fake_client = _FakeClient()
+    monkeypatch.setattr(
+        ch_mod, "DingTalkStreamClient", lambda _cred: fake_client
+    )
+    monkeypatch.setattr(
+        ch_mod,
+        "Credential",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        ch_mod.websockets,
+        "connect",
+        lambda *_a, **_k: _FakeConnectCM(ws),
+    )
+
+    channel = ch_mod.DingTalkChannel("cid", "secret", robot_code="bot")
+    done = threading.Event()
+
+    def _run():
+        try:
+            channel.start(lambda _m: None)
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    deadline = time.time() + 3.0
+    while channel._stream_loop is None and time.time() < deadline:
+        time.sleep(0.05)
+    assert channel._stream_loop is not None
+    channel.stop()
+    assert done.wait(3.0), "stream did not stop after channel.stop()"
+    t.join(timeout=1.0)
+    assert ws.closed or not t.is_alive()
 
 
 def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):

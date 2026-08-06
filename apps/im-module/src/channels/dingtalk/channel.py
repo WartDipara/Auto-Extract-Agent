@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import threading
@@ -9,7 +10,9 @@ from collections import deque
 from pathlib import Path
 from time import monotonic
 from typing import Callable, Sequence
+from urllib.parse import quote_plus
 
+import websockets
 from dingtalk_stream import AckMessage, ChatbotMessage, Credential, DingTalkStreamClient
 from dingtalk_stream.chatbot import ChatbotHandler
 
@@ -25,6 +28,7 @@ from channels.dingtalk.session_store import load_session_replies, save_session_r
 _log = logging.getLogger(__name__)
 
 _AT_TOKEN_RE = re.compile(r"@\S+")
+_STREAM_POLL_SEC = 0.25
 
 
 class _SeenIds:
@@ -113,6 +117,8 @@ class DingTalkChannel:
             else None
         )
         self._session_replies: dict[str, SessionReplyTarget] = {}
+        self._stream_client: DingTalkStreamClient | None = None
+        self._stream_loop: asyncio.AbstractEventLoop | None = None
         if self._session_state_path is not None:
             loaded = load_session_replies(self._session_state_path)
             self._session_replies.update(loaded)
@@ -125,6 +131,104 @@ class DingTalkChannel:
 
     def stop(self) -> None:
         self._stop.set()
+        self._schedule_close_websocket()
+
+    def _schedule_close_websocket(self) -> None:
+        """Wake the blocked async-for by closing the active websocket."""
+        loop = self._stream_loop
+        client = self._stream_client
+        if loop is None or client is None:
+            return
+        if not loop.is_running():
+            return
+
+        def _close() -> None:
+            ws = getattr(client, "websocket", None)
+            if ws is None:
+                return
+            try:
+                asyncio.ensure_future(ws.close(), loop=loop)
+            except Exception:
+                _log.exception("dingtalk websocket close failed")
+
+        try:
+            loop.call_soon_threadsafe(_close)
+        except Exception:
+            _log.exception("dingtalk schedule websocket close failed")
+
+    async def _sleep_unless_stopped(self, seconds: float) -> bool:
+        """Sleep in slices; return True if stop was requested."""
+        deadline = monotonic() + max(0.0, float(seconds))
+        while not self._stop.is_set():
+            remain = deadline - monotonic()
+            if remain <= 0:
+                return False
+            await asyncio.sleep(min(_STREAM_POLL_SEC, remain))
+        return True
+
+    async def _stream_forever(self, client: DingTalkStreamClient) -> None:
+        """
+        Stoppable stream loop.
+
+        Upstream DingTalkStreamClient.start() reconnects on CancelledError /
+        ConnectionClosed and only exits on KeyboardInterrupt — so Ctrl+C via
+        channel.stop() never unwound. Honor self._stop and close the socket.
+        """
+        self._stream_loop = asyncio.get_running_loop()
+        self._stream_client = client
+        client.pre_start()
+        while not self._stop.is_set():
+            try:
+                connection = client.open_connection()
+                if not connection:
+                    _log.error("dingtalk open connection failed")
+                    if await self._sleep_unless_stopped(10.0):
+                        return
+                    continue
+                _log.info("dingtalk endpoint is %s", connection)
+                uri = (
+                    f'{connection["endpoint"]}'
+                    f'?ticket={quote_plus(connection["ticket"])}'
+                )
+                async with websockets.connect(uri) as websocket:
+                    client.websocket = websocket
+                    keepalive = asyncio.create_task(client.keepalive(websocket))
+                    try:
+                        async for raw_message in websocket:
+                            if self._stop.is_set():
+                                return
+                            json_message = json.loads(raw_message)
+                            asyncio.create_task(
+                                client.background_task(json_message)
+                            )
+                    finally:
+                        keepalive.cancel()
+                        try:
+                            await keepalive
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            pass
+                        client.websocket = None
+            except KeyboardInterrupt:
+                self._stop.set()
+                return
+            except (
+                asyncio.CancelledError,
+                websockets.exceptions.ConnectionClosedError,
+                websockets.exceptions.ConnectionClosedOK,
+            ) as exc:
+                if self._stop.is_set():
+                    return
+                _log.error("dingtalk network exception: %s", exc)
+                if await self._sleep_unless_stopped(3.0):
+                    return
+            except Exception:
+                if self._stop.is_set():
+                    return
+                _log.exception("dingtalk stream unknown exception")
+                if await self._sleep_unless_stopped(3.0):
+                    return
 
     def start(self, on_message: MessageHandler) -> None:
         self._on_message = on_message
@@ -143,7 +247,7 @@ class DingTalkChannel:
         )
         while not self._stop.is_set():
             try:
-                asyncio.run(client.start())
+                asyncio.run(self._stream_forever(client))
             except KeyboardInterrupt:
                 self._stop.set()
                 break
@@ -152,6 +256,8 @@ class DingTalkChannel:
             _log.warning("dingtalk stream disconnected; retry in 3s")
             if self._stop.wait(3.0):
                 break
+        self._stream_loop = None
+        self._stream_client = None
         _log.info("dingtalk stream stopped")
 
     def handle_incoming(self, msg: ChatbotMessage) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import atexit
 import logging
-import signal
 import sqlite3
 import threading
 import time
@@ -154,7 +153,6 @@ class Courier:
         self._online_announced = False
         self._offline_announced = False
         self._offline_lock = threading.Lock()
-        self._shutdown_requested = False
         self._core_fault_announced = False
         self._hooks_registered = False
         self._missing_chat_warned: set[str] = set()
@@ -173,47 +171,27 @@ class Courier:
         try:
             self._channel.start(self.on_message)
         except KeyboardInterrupt:
-            _log.info("im-module stopped")
+            _log.info("im-module stopping")
         finally:
-            # Announce offline here (normal context), never inside the signal handler.
+            # Stream exit / Ctrl+C → stop channel, then offline in normal context.
             self.stop()
 
     def _request_shutdown(self) -> None:
-        """Stop stream only — no network I/O (safe from signal handler)."""
+        """Stop poll + channel stream; no network I/O."""
         self._stop.set()
         stopper = getattr(self._channel, "stop", None)
         if callable(stopper):
             stopper()
 
     def stop(self) -> None:
-        self._announce_offline_once()
         self._request_shutdown()
+        self._announce_offline_once()
 
     def _register_lifecycle_hooks(self) -> None:
         if self._hooks_registered:
             return
         self._hooks_registered = True
-
-        def _on_exit() -> None:
-            self._announce_offline_once()
-
-        atexit.register(_on_exit)
-
-        def _on_signal(signum, _frame) -> None:
-            if self._shutdown_requested:
-                return
-            self._shutdown_requested = True
-            _log.info("signal %s received, shutting down", signum)
-            # Do not announce/HTTP here — Ctrl+C re-enters and aborts mid-broadcast.
-            self._request_shutdown()
-            # DingTalk SDK stream loops break on KeyboardInterrupt only.
-            raise KeyboardInterrupt
-
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                signal.signal(sig, _on_signal)
-            except (ValueError, OSError):
-                pass
+        atexit.register(self._announce_offline_once)
 
     def _send_lifecycle(self, chat_id: str, text: str) -> None:
         """Lifecycle notices: prefer OpenAPI broadcast when channel supports it."""
@@ -335,8 +313,7 @@ class Courier:
         with self._offline_lock:
             if self._offline_announced:
                 return
-            # Mark before send so concurrent atexit/finally cannot double-send;
-            # we only reach here after stream exit (not from the signal handler).
+            # Mark before send so concurrent atexit/finally cannot double-send.
             self._offline_announced = True
             self._announce(config.pick_bot_offline())
 
