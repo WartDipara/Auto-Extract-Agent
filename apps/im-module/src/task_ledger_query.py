@@ -299,7 +299,7 @@ def run_ledger_query(
             )
         return LedgerQueryResult(
             ok=True,
-            message=f"密码是 '{password}' , 将bin文件用zip解压",
+            message=f"解压密码：{password}\n说明：将 .bin 按 zip 解压即可。",
         )
 
     try:

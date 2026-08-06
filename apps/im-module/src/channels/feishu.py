@@ -163,6 +163,9 @@ class FeishuChannel:
         resp = self._client.im.v1.message.create(req)
         if not resp.success():
             _log.error("reply_text failed code=%s msg=%s", resp.code, resp.msg)
+            raise RuntimeError(
+                f"feishu reply_text failed code={resp.code} msg={resp.msg}"
+            )
 
     def send_file(self, chat_id: str, path: Path) -> None:
         path = Path(path)

@@ -82,13 +82,23 @@ def load() -> None:
     )
 
 
+def has_source_file(source_file: str) -> bool:
+    return task_store.has_source_file(source_file)
+
+
 def enqueue_urls(
     urls: list, source_file: str, *, im_chat_id: str = "", im_sender_id: str = ""
 ) -> list:
     created: list[Task] = []
     chat = (im_chat_id or "").strip()
     sender = (im_sender_id or "").strip()
+    source = (source_file or "").strip()
     with _lock:
+        if source and task_store.has_source_file(source):
+            _log.info(
+                "skip enqueue; source_file already in ledger: %s", source
+            )
+            return []
         for url in urls:
             url = (url or "").strip()
             if not url:

@@ -327,6 +327,19 @@ def get_task(task_id: str) -> Task | None:
         return _row_to_task(row) if row else None
 
 
+def has_source_file(source_file: str) -> bool:
+    name = (source_file or "").strip()
+    if not name:
+        return False
+    table = _table()
+    with _lock:
+        conn = _require_conn()
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE source_file=? LIMIT 1", (name,)
+        ).fetchone()
+        return row is not None
+
+
 def list_by_status(*statuses: str) -> list[Task]:
     if not statuses:
         return []

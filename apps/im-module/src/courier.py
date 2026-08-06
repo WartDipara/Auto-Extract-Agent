@@ -16,6 +16,13 @@ from delivery_audit import append_delivery_event
 from inbox_writer import new_request_id, write_inbox_json
 from ops_commands import parse_ops_command
 from parser import parse_task_message
+from pending_inbox import (
+    add_pending,
+    bump_resubmit,
+    list_pending,
+    mark_exhausted,
+    remove_pending,
+)
 from task_ledger_query import run_ledger_query
 
 _log = logging.getLogger(__name__)
@@ -43,6 +50,8 @@ class Courier:
         self._hooks_registered = False
         self._missing_chat_warned: set[str] = set()
         self._deliver_fail_warned: set[str] = set()
+        self._zip_timeout_warned: set[str] = set()
+        self._pending_exhausted_warned: set[str] = set()
 
     def start(self) -> None:
         self._register_lifecycle_hooks()
@@ -159,7 +168,7 @@ class Courier:
         if payload is None:
             self._channel.reply_text(
                 chat_id,
-                f"{config.BOT_NAME}没看懂这条指令。\n{config.OPS_TEMPLATE}",
+                f"未能识别该指令。\n{config.OPS_TEMPLATE}",
                 at_user_ids=at_ids,
             )
             return
@@ -210,7 +219,26 @@ class Courier:
             body["im_sender_id"] = sender_id
         payload = {route: body}
         request_id = new_request_id()
-        path = write_inbox_json(config.INBOX_DIR, payload, request_id=request_id)
+        filename = f"im_{request_id}.json"
+        path = (Path(config.INBOX_DIR) / filename).resolve()
+        state = Path(config.PENDING_INBOX_STATE)
+        # Track first so a crash after inbox write still has urls to rewrite.
+        add_pending(
+            state,
+            filename=filename,
+            inbox_path=str(path),
+            chat_id=chat_id,
+            sender_id=sender_id,
+            urls=list(urls),
+            route=route,
+        )
+        try:
+            path = write_inbox_json(
+                config.INBOX_DIR, payload, request_id=request_id
+            )
+        except Exception:
+            remove_pending(state, filename)
+            raise
         if ack:
             self._channel.reply_text(
                 chat_id,
@@ -218,8 +246,9 @@ class Courier:
                 at_user_ids=at_user_ids,
             )
         _log.info(
-            "submitted %s chat=%s sender=%s urls=%s",
+            "submitted %s path=%s chat=%s sender=%s urls=%s",
             path.name,
+            path,
             chat_id,
             sender_id or "-",
             len(urls),
@@ -227,7 +256,7 @@ class Courier:
         return path
 
     def _enqueue_ack_text(self, filename: str, url_count: int) -> str:
-        base = f"已入队：{filename}\nurls={url_count}"
+        base = f"已登记：{filename}\n链接数={url_count}"
         if self._core_is_healthy(stale_sec=config.CORE_SUBMIT_STALE_SEC):
             return base
         # Same group already heard via this ack — suppress later poll broadcast.
@@ -245,6 +274,7 @@ class Courier:
             try:
                 self._tick()
                 self._check_core_health()
+                self._reconcile_pending_inbox()
             except Exception:
                 _log.exception("poll tick failed")
             self._stop.wait(config.POLL_SEC)
@@ -275,6 +305,124 @@ class Courier:
         elif healthy and self._core_fault_announced:
             self._announce(config.pick_core_up())
             self._core_fault_announced = False
+            # Core just recovered: rewrite any vanished inbox files now.
+            self._reconcile_pending_inbox(force_resubmit=True)
+
+    def _reconcile_pending_inbox(self, *, force_resubmit: bool = False) -> None:
+        """Ensure deferred inbox files still exist until Module A accepts them."""
+        state = Path(config.PENDING_INBOX_STATE)
+        pending = list_pending(state)
+        if not pending:
+            return
+        core_ok = self._core_is_healthy()
+        for item in pending:
+            filename = str(item.get("filename") or "").strip()
+            if not filename:
+                continue
+            if item.get("exhausted"):
+                continue
+            if _source_accepted(filename) or _source_processed_ok(filename):
+                remove_pending(state, filename)
+                self._pending_exhausted_warned.discard(filename)
+                continue
+            if _source_rejected(filename):
+                self._notify_pending_terminal(
+                    item,
+                    f"入队未受理（请检查链接或格式）：{filename}",
+                )
+                remove_pending(state, filename)
+                continue
+            path = Path(str(item.get("inbox_path") or "")).expanduser()
+            if not path.is_absolute():
+                path = Path(config.INBOX_DIR) / filename
+            if path.is_file():
+                if core_ok and (
+                    force_resubmit or _inbox_file_stale(path)
+                ):
+                    try:
+                        path.touch()
+                    except OSError:
+                        _log.exception(
+                            "touch pending inbox failed file=%s", filename
+                        )
+                continue
+            # File missing before core accepted it — rewrite when core is up.
+            if not core_ok and not force_resubmit:
+                _log.warning(
+                    "pending inbox missing while core down file=%s", filename
+                )
+                continue
+            urls = [u for u in (item.get("urls") or []) if str(u).strip()]
+            if not urls:
+                remove_pending(state, filename)
+                continue
+            resubmits = int(item.get("resubmit_count") or 0)
+            if resubmits >= int(config.PENDING_INBOX_RESUBMIT_MAX):
+                _log.error(
+                    "pending inbox resubmit exhausted file=%s", filename
+                )
+                mark_exhausted(state, filename)
+                self._notify_pending_terminal(
+                    item,
+                    f"入队自动重试已达上限，请重新提交：{filename}",
+                )
+                continue
+            route = str(item.get("route") or config.INBOX_ROUTE).strip()
+            chat_id = str(item.get("chat_id") or "").strip()
+            sender_id = str(item.get("sender_id") or "").strip()
+            body = {"urls": urls, "im_chat_id": chat_id}
+            if sender_id:
+                body["im_sender_id"] = sender_id
+            request_id = (
+                filename[3:-5]
+                if filename.startswith("im_") and filename.endswith(".json")
+                else new_request_id()
+            )
+            try:
+                written = write_inbox_json(
+                    config.INBOX_DIR,
+                    {route: body},
+                    request_id=request_id,
+                )
+            except Exception:
+                _log.exception("pending inbox rewrite failed file=%s", filename)
+                continue
+            bump_resubmit(state, filename)
+            _log.warning(
+                "pending inbox rewritten file=%s path=%s",
+                filename,
+                written,
+            )
+            if chat_id:
+                try:
+                    at_ids = [sender_id] if sender_id else None
+                    self._channel.reply_text(
+                        chat_id,
+                        f"处理服务已恢复，已重新投递：{filename}",
+                        at_user_ids=at_ids,
+                    )
+                except Exception:
+                    _log.exception(
+                        "pending inbox rewrite notice failed file=%s", filename
+                    )
+
+    def _notify_pending_terminal(self, item: dict, text: str) -> None:
+        filename = str(item.get("filename") or "").strip()
+        if not filename or filename in self._pending_exhausted_warned:
+            return
+        self._pending_exhausted_warned.add(filename)
+        chat_id = str(item.get("chat_id") or "").strip()
+        sender_id = str(item.get("sender_id") or "").strip()
+        if not chat_id:
+            return
+        try:
+            self._channel.reply_text(
+                chat_id,
+                text,
+                at_user_ids=[sender_id] if sender_id else None,
+            )
+        except Exception:
+            _log.exception("pending terminal notice failed file=%s", filename)
 
     def _tick(self) -> None:
         for done in _list_undelivered():
@@ -341,32 +489,40 @@ class Courier:
             if not zip_path.is_file():
                 if _age_since_finish_sec(done) < config.ZIP_WAIT_SEC:
                     return False
-                try:
-                    self._channel.reply_text(
-                        chat_id,
-                        f"任务成功但结果文件超时未出现：{label} "
-                        f"({zip_path.name or '-'}) task_id={task_id}",
-                        at_user_ids=at_ids,
+                # Do NOT mark delivered — bin may appear later; keep retrying.
+                if task_id not in self._zip_timeout_warned:
+                    self._zip_timeout_warned.add(task_id)
+                    try:
+                        self._channel.reply_text(
+                            chat_id,
+                            f"任务已成功，结果文件尚未就绪，将继续等待后回传："
+                            f"{label} ({zip_path.name or '-'}) "
+                            f"task_id={task_id}",
+                            at_user_ids=at_ids,
+                        )
+                    except Exception as exc:
+                        _log.exception(
+                            "deliver timeout notice failed task_id=%s", task_id
+                        )
+                        self._audit(
+                            done,
+                            chat_id=chat_id,
+                            channel="reply",
+                            outcome="zip_missing_notice_failed",
+                            error=str(exc),
+                        )
+                        _set_deliver_error(task_id, str(exc), table=table)
+                        return False
+                    _set_deliver_error(
+                        task_id, "waiting for buf_done zip", table=table
                     )
-                except Exception as exc:
-                    _log.exception("deliver timeout notice failed task_id=%s", task_id)
                     self._audit(
                         done,
                         chat_id=chat_id,
                         channel="reply",
-                        outcome="zip_missing_notice_failed",
-                        error=str(exc),
+                        outcome="zip_missing_waiting",
                     )
-                    _set_deliver_error(task_id, str(exc), table=table)
-                    return False
-                _mark_delivered(task_id, table=table, deliver_error="")
-                self._audit(
-                    done,
-                    chat_id=chat_id,
-                    channel="reply",
-                    outcome="zip_missing_timeout",
-                )
-                return True
+                return False
 
             file_sent = False
             try:
@@ -420,6 +576,7 @@ class Courier:
                     error=text_err,
                 )
                 self._deliver_fail_warned.discard(task_id)
+                self._zip_timeout_warned.discard(task_id)
                 return True
 
             _mark_delivered(task_id, table=table, deliver_error="")
@@ -430,6 +587,7 @@ class Courier:
                 outcome="ok",
             )
             self._deliver_fail_warned.discard(task_id)
+            self._zip_timeout_warned.discard(task_id)
             return True
 
         err = done.get("error") or st
@@ -463,6 +621,60 @@ class Courier:
 def _resolve_delivery_chat(done: dict) -> str:
     """Task results only go to the recorded chat — never announce fallback."""
     return str(done.get("im_chat_id") or "").strip()
+
+
+def _processed_dir() -> Path:
+    if not config.MODULES:
+        return Path(config.INBOX_DIR).parent / "state" / "processed"
+    return Path(config.MODULES[0].state_dir) / "processed"
+
+
+def _source_accepted(source_file: str) -> bool:
+    """True if Module A ledger already has a row for this inbox filename."""
+    name = (source_file or "").strip()
+    if not name:
+        return False
+    db = Path(config.TASKS_DB)
+    if not db.is_file():
+        return False
+    uri = f"file:{db.resolve().as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=30.0)
+    try:
+        for spec in config.MODULES:
+            try:
+                row = conn.execute(
+                    f"SELECT 1 FROM {spec.tasks_table} WHERE source_file=? LIMIT 1",
+                    (name,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            if row is not None:
+                return True
+        return False
+    finally:
+        conn.close()
+
+
+def _source_processed_ok(source_file: str) -> bool:
+    name = (source_file or "").strip()
+    if not name:
+        return False
+    return (_processed_dir() / name).is_file()
+
+
+def _source_rejected(source_file: str) -> bool:
+    name = (source_file or "").strip()
+    if not name:
+        return False
+    return (_processed_dir() / f"rejected_{name}").is_file()
+
+
+def _inbox_file_stale(path: Path) -> bool:
+    try:
+        age = time.time() - path.stat().st_mtime
+    except OSError:
+        return True
+    return age >= float(config.PENDING_INBOX_STALE_TOUCH_SEC)
 
 
 def _age_since_finish_sec(done: dict) -> float:

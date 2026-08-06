@@ -274,7 +274,9 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     pw = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_password")
     )
-    assert pw.ok and pw.message == "密码是 'gametool999' , 将bin文件用zip解压"
+    assert pw.ok and pw.message == (
+        "解压密码：gametool999\n说明：将 .bin 按 zip 解压即可。"
+    )
 
     prog = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_progress")

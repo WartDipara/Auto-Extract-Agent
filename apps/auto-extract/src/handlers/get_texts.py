@@ -1,44 +1,39 @@
 import logging
-import shutil
-import time
 from pathlib import Path
 
-import config
 import queue_manager
 from pipeline import start_pipeline
 
 _log = logging.getLogger(__name__)
 
 
-def _move_processed(source_path: Path):
-    config.PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    dest = config.PROCESSED_DIR / source_path.name
-    if dest.exists():
-        dest = config.PROCESSED_DIR / f"{source_path.stem}_{int(time.time())}{source_path.suffix}"
-    shutil.move(str(source_path), str(dest))
-    _log.info("moved inbox file to %s", dest)
-
-
 def ensure_worker():
     start_pipeline()
 
 
-def handle_get_texts(body: dict, source_path: Path):
+def handle_get_texts(body: dict, source_path: Path) -> bool:
+    """Accept get-texts payload. Return True if ledger accepted (or already has) it."""
     urls = body.get("urls") if isinstance(body, dict) else None
     if not isinstance(urls, list) or not urls:
         _log.warning("get-texts missing urls: %s", source_path.name)
-        _move_processed(source_path)
-        return
+        return False
+    cleaned = [str(u).strip() for u in urls if str(u).strip()]
+    if not cleaned:
+        _log.warning("get-texts empty urls after trim: %s", source_path.name)
+        return False
     im_chat_id = ""
     im_sender_id = ""
     if isinstance(body, dict):
         im_chat_id = str(body.get("im_chat_id") or "").strip()
         im_sender_id = str(body.get("im_sender_id") or "").strip()
     ensure_worker()
-    queue_manager.enqueue_urls(
-        urls,
+    created = queue_manager.enqueue_urls(
+        cleaned,
         source_file=source_path.name,
         im_chat_id=im_chat_id,
         im_sender_id=im_sender_id,
     )
-    _move_processed(source_path)
+    # Idempotent re-delivery of same source_file returns [] but is still accepted.
+    if created:
+        return True
+    return queue_manager.has_source_file(source_path.name)

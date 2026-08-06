@@ -52,14 +52,22 @@ def _process_file(path: Path):
         if data is None:
             _move_aside(path, prefix="rejected_")
             return
-        _log.info("inbox accepted: %s", path.name)
-        dispatch(data, path)
-        if path.is_file():
+        ok = dispatch(data, path)
+        if not path.is_file():
+            return
+        if ok:
+            _log.info("inbox accepted: %s", path.name)
             _move_aside(path)
+        else:
+            _log.warning("inbox rejected (not enqueued): %s", path.name)
+            _move_aside(path, prefix="rejected_")
     except json.JSONDecodeError as exc:
         _log.error("invalid json %s: %s", path.name, exc)
         if path.is_file():
             _move_aside(path, prefix="rejected_")
+    except Exception:
+        # Leave file in inbox for rescan; do not swallow into processed.
+        _log.exception("inbox process failed (kept for retry): %s", path.name)
     finally:
         _PROCESSING.discard(key)
 

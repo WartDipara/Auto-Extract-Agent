@@ -56,7 +56,12 @@ DINGTALK_SESSION_STATE = (
     _APP_ROOT / "state" / "dingtalk_session_replies.json"
 ).resolve()
 DELIVERY_AUDIT_PATH = (_APP_ROOT / "state" / "delivery_audit.jsonl").resolve()
+PENDING_INBOX_STATE = (_APP_ROOT / "state" / "pending_inbox.json").resolve()
 SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()
+# Max times IM may rewrite a missing inbox file after core recovers.
+PENDING_INBOX_RESUBMIT_MAX = 3
+# Touch inbox files older than this while still pending (watcher may be stuck).
+PENDING_INBOX_STALE_TOUCH_SEC = 30.0
 
 CORE_HEARTBEAT_PATH = _PRIMARY.heartbeat_path
 # Background poll: announce core down after this age.
@@ -66,46 +71,37 @@ CORE_SUBMIT_STALE_SEC = 10.0
 
 BOT_NAME = "Viola"
 
+# Work-group tone: concise, status-first, no slang. Prefer「处理服务」over mixed 后台/服务器.
 MSG_BOT_ONLINE_VARIANTS = (
-    f"{BOT_NAME}已就位，可以开始工作了",
-    f"{BOT_NAME}准备好了～随时接消息",
-    f"报到！{BOT_NAME}在线，把链接丢过来就行",
-    f"{BOT_NAME}上线了，有需要直接喊{BOT_NAME}",
-    f"嗯，{BOT_NAME}来了。已就位！",
+    f"{BOT_NAME}已上线，可以接收任务。",
+    f"{BOT_NAME}已就位，请直接提交链接。",
+    f"{BOT_NAME}在线，任务通道已就绪。",
 )
 MSG_BOT_OFFLINE_VARIANTS = (
-    f"{BOT_NAME}目前有急事，先去休息了",
-    f"{BOT_NAME}去歇会儿，稍后再来～",
-    f"先休息啦，有事稍后找{BOT_NAME}",
-    f"{BOT_NAME}先去休息了，下次再一起合作",
-    f"{BOT_NAME}家里的金鱼溺水了，先离开一下",
+    f"{BOT_NAME}即将下线，暂不可接收新任务。",
+    f"{BOT_NAME}已下线，请稍后再提交。",
 )
 MSG_CORE_DOWN_VARIANTS = (
-    f"出故障了：（ 等{BOT_NAME}去修修",
-    f"后台卡住了，{BOT_NAME}去敲两下再来",
-    f"哎呀服务罢工了，稍等{BOT_NAME}抢修",
-    f"报错了，先别催单，{BOT_NAME}去处理",
-    "出了点状况……修完马上回来",
+    f"处理服务异常，{BOT_NAME}正在排查；已登记任务会在恢复后继续。",
+    f"处理服务暂不可用，修复完成后将自动继续未完成任务。",
+    f"处理服务中断，请稍候；恢复后无需重复提交已登记任务。",
 )
 MSG_CORE_UP_VARIANTS = (
-    "搞定了，又可以正常工作了",
-    "修好啦，可以继续干活了",
-    "恢复正常，可以继续了",
-    "抢修完成，继续开工！",
-    "活过来了～服务已恢复",
+    "处理服务已恢复，可以继续提交任务。",
+    "处理服务已恢复，未完成任务将自动继续。",
+    "处理服务已恢复，通道正常。",
 )
 
 MSG_ENQUEUE_CORE_DEFERRED_FIRST = (
-    f"对了，后台这会儿好像卡住了；不过任务已经记下，"
-    f"{BOT_NAME}修好后会自动接着做。"
+    "处理服务暂不可用；任务已登记，恢复后将自动继续。"
 )
 MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
-    f"后台还在恢复中，任务已记下，好了会自动继续。"
+    "处理服务仍在恢复中；任务已登记，恢复后将自动继续。"
 )
 # 故意保留，因爲當初創建機器人的時候沒想到不能改名！！
 OPS_TEMPLATE = (
     "用法：\n"
-    "【提交任务】直接填入 APK 下载链接，可多条\n"
+    "【提交任务】直接发送 APK 下载链接，可多条\n"
     f"  @{BOT_NAME} https://example.com/a.apk\n"
     f"  @{BOT_NAME} https://example.com/b.apk\n"
     "  ......\n"
@@ -120,41 +116,29 @@ OPS_TEMPLATE = (
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi\n"
     "\n"
-    "【你会收到什么】\n"
-    "  成功：群里回传一个 .bin 文件（本质是加密 zip，改后缀）\n"
-    "        里面是提取出的文本 CSV；用 zip 工具 + 密码解压即可\n"
-    "  失败：群里直接发文字说明（状态 + 原因）\n"
+    "【回传说明】\n"
+    "  成功：群内回传 .bin（加密 zip 改后缀），内含提取文本 CSV；\n"
+    "        使用 zip 工具与密码解压即可。\n"
+    "  失败：群内文字说明状态与原因。\n"
     "\n"
-    "【任务时长预期】 15-50 分钟，最大不超过二小时\n"
-    "【解压密码】\n"
-    "  仅用于打开成功回传的 .bin（当 zip 解压）；\n"
-    "  防止文件在传输时被平台误扫。忘记了就用 query password 查询。"
+    "【时长预期】通常 15–50 分钟，最长不超过 2 小时。\n"
+    "\n"
+    "【解压密码】仅用于打开成功回传的 .bin；\n"
+    "  忘记可用 query password 查询。"
 )
 
 _MSG_GREET_BODIES = (
     (
-        f"你好，我是{BOT_NAME}～\n"
-        f"{BOT_NAME}负责传话：你把 APK 下载链接发给{BOT_NAME}，"
-        f"{BOT_NAME}会转给专人帮你解决，完成后把结果发回给你。"
+        f"你好，我是{BOT_NAME}。\n"
+        f"请发送 APK 下载链接；{BOT_NAME}负责登记、调度，并在完成后回传结果。"
     ),
     (
-        f"嗨，我是{BOT_NAME}。\n"
-        f"{BOT_NAME}负责传信的：你给{BOT_NAME}链接，{BOT_NAME}帮忙登记排队，"
-        "有结果了再送回群里。"
+        f"你好，我是{BOT_NAME}。\n"
+        f"提交链接即可入队；处理完成后结果会发回本群。"
     ),
     (
-        f"你好呀，{BOT_NAME}在此～\n"
-        f"别跟{BOT_NAME}聊太复杂的，发下载链接就对了；"
-        f"中间怎么处理不用操心，有消息{BOT_NAME}会告诉你。"
-    ),
-    (
-        f"Hello，我是{BOT_NAME}！\n"
-        f"你负责丢链接，{BOT_NAME}负责传话和回传结果。"
-    ),
-    (
-        f"在的，我是{BOT_NAME}。\n"
-        f"把下载地址发给{BOT_NAME}，"
-        f"办完后{BOT_NAME}会把结果回传给你。"
+        f"你好，我是{BOT_NAME}。\n"
+        f"当前支持提交任务与台账查询；详情见下方用法。"
     ),
 )
 

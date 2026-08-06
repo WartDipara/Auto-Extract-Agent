@@ -85,14 +85,20 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
         if p in sys.path:
             sys.path.remove(p)
         sys.path.insert(0, p)
-    cfg = sys.modules.get("config")
-    if cfg is not None and "im-module" not in (cfg.__file__ or ""):
-        for name in ("config", "courier", "ops_commands", "task_ledger_query"):
-            sys.modules.pop(name, None)
+    for name in (
+        "config",
+        "courier",
+        "ops_commands",
+        "task_ledger_query",
+        "pending_inbox",
+        "delivery_audit",
+    ):
+        sys.modules.pop(name, None)
 
     import config
     import courier as courier_mod
     import sqlite3
+    assert "im-module" in (config.__file__ or "").replace("\\", "/")
 
     class _FakeChannel:
         def __init__(self):
@@ -310,8 +316,8 @@ def test_enqueue_ack_mentions_core_down_once(tmp_path, monkeypatch):
     # No heartbeat file → submit path treats core as down.
     c._enqueue_urls("group:cid-a", ["https://a.apk"], ack=True)
     assert len(ch.texts) == 1
-    assert "已入队" in ch.texts[0][1]
-    assert "记下" in ch.texts[0][1]
+    assert "已登记" in ch.texts[0][1]
+    assert "处理服务暂不可用" in ch.texts[0][1]
     assert c._core_fault_announced is True
 
     # Poll must not broadcast a second core-down.
@@ -449,8 +455,12 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
 
     hb = tmp_path / "heartbeat"
     monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "group:cid-test")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", tmp_path / "announce.json")
     monkeypatch.setattr(config, "CORE_HEARTBEAT_PATH", hb)
     monkeypatch.setattr(config, "CORE_HEARTBEAT_STALE_SEC", 45.0)
+    monkeypatch.setattr(config, "INBOX_DIR", tmp_path / "inbox")
+    monkeypatch.setattr(config, "PENDING_INBOX_STATE", tmp_path / "pending_inbox.json")
+    (tmp_path / "inbox").mkdir()
 
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
@@ -469,12 +479,13 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     c._check_core_health()
     assert ch.texts == before
 
-    # Fresh heartbeat → one recover
+    # Fresh heartbeat → one recover (may be followed by pending reconcile notices)
     hb.write_text("ok\n", encoding="utf-8")
     c._check_core_health()
-    assert ch.texts[-1][0] == "group:cid-test"
-    assert ch.texts[-1][1] in config.MSG_CORE_UP_VARIANTS
-    up_msg = ch.texts[-1][1]
+    up_msgs = [t for t in ch.texts if t[1] in config.MSG_CORE_UP_VARIANTS]
+    assert len(up_msgs) == 1
+    assert up_msgs[0][0] == "group:cid-test"
+    up_msg = up_msgs[0][1]
     c._check_core_health()
     assert len([t for t in ch.texts if t[1] == up_msg]) == 1
 
@@ -655,6 +666,68 @@ def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):
     assert "im_chat_id" in (row[1] or "")
     assert audit.is_file()
     assert "missing_im_chat_id" in audit.read_text(encoding="utf-8")
+
+
+def test_pending_inbox_rewritten_when_missing_after_core_up(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "pending_inbox", "inbox_writer"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    from pending_inbox import add_pending, list_pending
+
+    class _FakeChannel:
+        def __init__(self):
+            self.texts: list[tuple[str, str]] = []
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            self.texts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    state = tmp_path / "pending_inbox.json"
+    hb = tmp_path / "heartbeat"
+    hb.write_text("ok", encoding="utf-8")
+    monkeypatch.setattr(config, "INBOX_DIR", inbox)
+    monkeypatch.setattr(config, "PENDING_INBOX_STATE", state)
+    monkeypatch.setattr(config, "CORE_HEARTBEAT_PATH", hb)
+    monkeypatch.setattr(config, "TASKS_DB", tmp_path / "missing.db")
+    monkeypatch.setattr(config, "PENDING_INBOX_RESUBMIT_MAX", 3)
+
+    filename = "im_1000_1.json"
+    add_pending(
+        state,
+        filename=filename,
+        inbox_path=str(inbox / filename),
+        chat_id="group:cid-a",
+        sender_id="staff-1",
+        urls=["https://cdn.example.com/a.apk"],
+        route="get-texts",
+    )
+    assert not (inbox / filename).exists()
+
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    c._reconcile_pending_inbox(force_resubmit=True)
+    rewritten = inbox / filename
+    assert rewritten.is_file()
+    data = json.loads(rewritten.read_text(encoding="utf-8"))
+    assert data["get-texts"]["urls"] == ["https://cdn.example.com/a.apk"]
+    assert any("重新投递" in t for _, t in ch.texts)
+    assert list_pending(state)[0]["resubmit_count"] == 1
 
 
 def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):

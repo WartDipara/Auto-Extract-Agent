@@ -189,6 +189,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Core heartbeat | Each registered core writes its own `state/heartbeat` every 5s (get-texts under auto-extract). IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
 | Ledger DB | Shared file `apps/auto-extract/state/tasks.db`; **one table per module** (get-texts → `tasks`). Registry: `shared/module_registry.py`. DingTalk stores `im_sender_id` (staffId) for @-back replies. |
 | Delivery | Strict `im_chat_id` only (fail-closed). Audit: `state/delivery_audit.jsonl`; last error in `im_deliver_error`. After file send success, text failure still marks delivered (no duplicate file). DingTalk: sessionWebhook @; if expired, OpenAPI group + OTO to sender. |
+| Deferred enqueue | IM tracks `state/pending_inbox.json`. If core was down and the inbox file vanishes before Module A accepts it, IM rewrites the file on core-up (and notifies the submitter). |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |
 | Runtime | Registered core(s) and IM both required; IM alone cannot extract |
