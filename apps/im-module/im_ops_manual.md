@@ -75,16 +75,25 @@ Full dump uses **`query export`** (Excel `.xlsx` file).
 
 Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`, delivery time, whether `.bin` exists, `session`, `adb`.
 
-### 3.1 Progress (active queue)
+### 3.1 My active tasks (asker view)
+
+```text
+@bot query mine
+```
+
+- Non-terminal statuses only, filtered by `im_sender_id` = current asker.
+- Max **30** rows; if more: `showing 30/N` + hint `query export`.
+
+### 3.2 Progress (all active)
 
 ```text
 @bot query progress
 ```
 
-- Non-terminal statuses only (`queued` … `extract_done`).
+- Non-terminal statuses only (`queued` … `extract_done`), **entire ledger**.
 - Max **30** rows (internal limit); if more: `showing 30/N` + hint `query export`.
 
-### 3.2 By status
+### 3.3 By status
 
 ```text
 @bot query status timeout
@@ -92,7 +101,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 
 - Max **20** rows (newest first). Over cap → hint `query export`.
 
-### 3.3 By id / filename / URL
+### 3.4 By id / filename / URL
 
 ```text
 @bot query gid t-0002
@@ -100,21 +109,21 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 @bot query gid https://.../game.apk
 ```
 
-- Match order: `task_id` → `filename` → `url` (exact).
-- Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`.
+- Match order: `task_id` (exact) → else `filename` / `url` **fuzzy** (`LIKE %token%`), up to **10** rows.
+- Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`, optional `deliver_err`.
 - Miss: `not found: …`.
 
-### 3.4 Export full table
+### 3.5 Export full table
 
 ```text
 @bot query export
 ```
 
-- Excel columns: `task_id,label,status,error,url,filename,im_chat_id,session_id,adb_serial,im_delivered_at,updated_at,finished_at` (UTC).
+- Excel columns: `task_id,label,status,error,url,filename,im_chat_id,im_sender_id,session_id,adb_serial,im_delivered_at,im_deliver_error,updated_at,finished_at` (UTC).
 - Hard cap 50000 rows; truncated exports note `truncated=true`.
 - Feishu sends the file; DingTalk may fall back to a local path hint.
 
-### 3.5 Result password
+### 3.6 Result password
 
 ```text
 @bot query password
@@ -123,7 +132,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 - Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (buf_done `.bin` pack password).
 - Reply example: `password is '…' , 将bin文件用zip解压`
 
-### 3.6 Help
+### 3.7 Help
 
 ```text
 @bot help
@@ -175,10 +184,11 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Item | Note |
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
-| Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
-| Lifecycle | Online message includes usage; offline to announce chat; core fault/recover is edge-only (no spam) |
+| Announce chats | Lifecycle broadcast set: pin via `ANNOUNCE_CHAT_ID` (comma-separated OK) **plus** every group that has @'d the bot (`state/announce_chat.json` → `chat_ids`). |
+| Lifecycle | Online / offline / core-fault **broadcast to all** announce chats. Task results never use announce — only that task's `im_chat_id`. |
 | Core heartbeat | Each registered core writes its own `state/heartbeat` every 5s (get-texts under auto-extract). IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
 | Ledger DB | Shared file `apps/auto-extract/state/tasks.db`; **one table per module** (get-texts → `tasks`). Registry: `shared/module_registry.py`. DingTalk stores `im_sender_id` (staffId) for @-back replies. |
+| Delivery | Strict `im_chat_id` only (fail-closed). Audit: `state/delivery_audit.jsonl`; last error in `im_deliver_error`. After file send success, text failure still marks delivered (no duplicate file). DingTalk: sessionWebhook @; if expired, OpenAPI group + OTO to sender. |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |
 | Runtime | Registered core(s) and IM both required; IM alone cannot extract |

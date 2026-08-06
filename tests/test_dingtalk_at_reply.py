@@ -77,6 +77,25 @@ def test_handle_incoming_records_sender_and_dispatches():
     assert "group:cid-abc" in channel._session_replies
 
 
+def test_reply_text_without_at_does_not_mention_cached_sender(monkeypatch):
+    channel = DingTalkChannel("cid", "secret", robot_code="bot")
+    calls: list[tuple] = []
+
+    def _fake_reply(target, text, *, at_user_ids=None):
+        calls.append((text, list(at_user_ids or [])))
+        return {}
+
+    monkeypatch.setattr(channel._api, "reply_session_text", _fake_reply)
+    channel._session_replies["group:cid-x"] = SessionReplyTarget(
+        webhook="https://example.com/session",
+        expire_at_ms=9_999_999_999_999,
+        sender_staff_id="staff-1",
+        sender_nick="Alice",
+    )
+    channel.reply_text("group:cid-x", "offline notice", at_user_ids=[])
+    assert calls == [("offline notice", [])]
+
+
 def test_session_store_survives_restart(tmp_path):
     path = tmp_path / "dingtalk_session_replies.json"
     target = SessionReplyTarget(
@@ -105,3 +124,44 @@ def test_session_store_survives_restart(tmp_path):
     )
     assert channel2._session_replies["group:cid-y"].sender_nick == "Carol"
     assert load_session_replies(path)["group:cid-y"].expire_at_ms == target.expire_at_ms
+
+
+def test_reply_text_openapi_fallback_sends_oto_when_at_required(monkeypatch):
+    channel = DingTalkChannel("cid", "secret", robot_code="bot")
+    groups: list[tuple[str, str]] = []
+    otos: list[tuple[str, str]] = []
+
+    def _group(cid, text):
+        groups.append((cid, text))
+        return {}
+
+    def _oto(uid, text):
+        otos.append((uid, text))
+        return {}
+
+    monkeypatch.setattr(channel._api, "send_group_text", _group)
+    monkeypatch.setattr(channel._api, "send_oto_text", _oto)
+    # No live sessionWebhook → OpenAPI path.
+    channel._session_replies.clear()
+    channel.reply_text("group:cid-x", "结果已发送", at_user_ids=["staff-9"])
+    assert groups == [("cid-x", "结果已发送")]
+    assert len(otos) == 1
+    assert otos[0][0] == "staff-9"
+    assert otos[0][1].startswith("[任务回传]")
+
+
+def test_reply_text_openapi_fallback_no_oto_without_at(monkeypatch):
+    channel = DingTalkChannel("cid", "secret", robot_code="bot")
+    otos: list = []
+
+    monkeypatch.setattr(
+        channel._api, "send_group_text", lambda *_a, **_k: {}
+    )
+    monkeypatch.setattr(
+        channel._api,
+        "send_oto_text",
+        lambda *a, **k: otos.append((a, k)) or {},
+    )
+    channel._session_replies.clear()
+    channel.reply_text("group:cid-x", "offline", at_user_ids=[])
+    assert otos == []

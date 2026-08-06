@@ -75,7 +75,8 @@ def open_store() -> None:
                 finished_at TEXT NOT NULL DEFAULT '',
                 im_delivered_at TEXT NOT NULL DEFAULT '',
                 im_chat_id TEXT NOT NULL DEFAULT '',
-                im_sender_id TEXT NOT NULL DEFAULT ''
+                im_sender_id TEXT NOT NULL DEFAULT '',
+                im_deliver_error TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_{table}_status ON {table}(status);
             CREATE INDEX IF NOT EXISTS idx_{table}_updated ON {table}(updated_at);
@@ -107,6 +108,10 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     if "im_sender_id" not in cols:
         conn.execute(
             f"ALTER TABLE {table} ADD COLUMN im_sender_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "im_deliver_error" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN im_deliver_error TEXT NOT NULL DEFAULT ''"
         )
 
 
@@ -145,6 +150,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         im_delivered_at=row["im_delivered_at"] or "",
         im_chat_id=_row_get(row, "im_chat_id"),
         im_sender_id=_row_get(row, "im_sender_id"),
+        im_deliver_error=_row_get(row, "im_deliver_error"),
     )
 
 
@@ -198,8 +204,8 @@ def insert_task(task: Task) -> Task:
                     task_id, url, source_file, filename, label, labels_json,
                     status, error, result_csv, session_id, buf_done_zip, adb_serial,
                     created_at, updated_at, finished_at, im_delivered_at, im_chat_id,
-                    im_sender_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    im_sender_id, im_deliver_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -220,6 +226,7 @@ def insert_task(task: Task) -> Task:
                     task.im_delivered_at or "",
                     task.im_chat_id or "",
                     task.im_sender_id or "",
+                    task.im_deliver_error or "",
                 ),
             )
             conn.commit()
@@ -246,6 +253,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
         "im_delivered_at",
         "im_chat_id",
         "im_sender_id",
+        "im_deliver_error",
     }
     patch = {k: v for k, v in fields.items() if k in allowed}
     if not patch:
@@ -278,7 +286,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     url=?, source_file=?, filename=?, label=?, labels_json=?,
                     status=?, error=?, result_csv=?, session_id=?, buf_done_zip=?,
                     adb_serial=?, updated_at=?, finished_at=?, im_delivered_at=?,
-                    im_chat_id=?, im_sender_id=?
+                    im_chat_id=?, im_sender_id=?, im_deliver_error=?
                 WHERE task_id=?
                 """,
                 (
@@ -298,6 +306,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     task.im_delivered_at or "",
                     task.im_chat_id or "",
                     task.im_sender_id or "",
+                    task.im_deliver_error or "",
                     task.task_id,
                 ),
             )

@@ -47,6 +47,8 @@ def parse_ops_command(text: str) -> OpsCommand | None:
     tail = parts[1].strip() if len(parts) > 1 else ""
     if mode == "progress":
         return OpsCommand(kind="query_progress")
+    if mode == "mine":
+        return OpsCommand(kind="query_mine")
     if mode == "export":
         return OpsCommand(kind="query_export")
     if mode == "password":

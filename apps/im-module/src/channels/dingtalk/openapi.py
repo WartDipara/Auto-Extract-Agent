@@ -81,8 +81,6 @@ class DingTalkOpenApi:
         if not target.alive():
             raise RuntimeError("dingtalk sessionWebhook expired")
         user_ids = [u for u in (at_user_ids or ()) if (u or "").strip()]
-        if not user_ids and target.sender_staff_id:
-            user_ids = [target.sender_staff_id]
         body: dict[str, Any] = {
             "msgtype": "text",
             "text": {"content": text},

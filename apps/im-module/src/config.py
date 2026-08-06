@@ -55,6 +55,7 @@ ANNOUNCE_CHAT_STATE = (_APP_ROOT / "state" / "announce_chat.json").resolve()
 DINGTALK_SESSION_STATE = (
     _APP_ROOT / "state" / "dingtalk_session_replies.json"
 ).resolve()
+DELIVERY_AUDIT_PATH = (_APP_ROOT / "state" / "delivery_audit.jsonl").resolve()
 SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()
 
 CORE_HEARTBEAT_PATH = _PRIMARY.heartbeat_path
@@ -110,9 +111,10 @@ OPS_TEMPLATE = (
     "  ......\n"
     "\n"
     "【查询】\n"
-    f"  @{BOT_NAME} query progress          查询进行中的任务\n"
+    f"  @{BOT_NAME} query mine              查询我提交的进行中任务\n"
+    f"  @{BOT_NAME} query progress          查询全部进行中的任务\n"
     f"  @{BOT_NAME} query status success    按状态筛选（如 success / failed / timeout）\n"
-    f"  @{BOT_NAME} query gid t-0002        查单个任务\n"
+    f"  @{BOT_NAME} query gid t-0002        查任务（id 精确；文件名/URL 可模糊）\n"
     f"  @{BOT_NAME} query export            导出全表 Excel\n"
     f"  @{BOT_NAME} query password          查看 .bin 解压密码\n"
     "\n"

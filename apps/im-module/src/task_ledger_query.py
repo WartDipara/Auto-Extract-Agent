@@ -25,6 +25,7 @@ _GID_COLS = (
     "error",
     "updated_at",
     "im_delivered_at",
+    "im_deliver_error",
     "session_id",
     "adb_serial",
     "buf_done_zip",
@@ -37,9 +38,11 @@ _EXPORT_COLS = (
     "url",
     "filename",
     "im_chat_id",
+    "im_sender_id",
     "session_id",
     "adb_serial",
     "im_delivered_at",
+    "im_deliver_error",
     "updated_at",
     "finished_at",
 )
@@ -47,6 +50,7 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _CHAR_BUDGET = 3500
 _LIST_ROW_CAP = 20
 _PROGRESS_ROW_CAP = 30
+_GID_ROW_CAP = 10
 _EXPORT_HARD_CAP = 50000
 _LABEL_MAX = 20
 _LIST_ERROR_MAX = 80
@@ -104,8 +108,19 @@ def _is_failure_terminal(status: str) -> bool:
     return status in TERMINAL_STATUSES and status != "success"
 
 
-def _format_progress(rows: list[sqlite3.Row], total: int) -> str:
-    lines = [f"progress: {total} active"]
+def _like_pattern(raw: str) -> str:
+    """Escape LIKE wildcards then wrap with %…%."""
+    escaped = (
+        (raw or "")
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
+
+
+def _format_progress(rows: list[sqlite3.Row], total: int, *, header: str) -> str:
+    lines = [header]
     for row in rows:
         label = _clip(str(row["label"] or "-"), _LABEL_MAX)
         lines.append(f"{row['task_id']}  {label}  {row['status']}")
@@ -138,6 +153,13 @@ def _format_list(rows: list[sqlite3.Row], *, header: str, total: int) -> str:
     return _fit_budget(body)
 
 
+def _row_has(row: sqlite3.Row, key: str) -> bool:
+    try:
+        return key in row.keys()
+    except Exception:
+        return False
+
+
 def _format_gid(rows: list[sqlite3.Row]) -> str:
     blocks: list[str] = []
     for row in rows:
@@ -155,6 +177,10 @@ def _format_gid(rows: list[sqlite3.Row]) -> str:
             f"session    {session}",
             f"adb        {adb}",
         ]
+        if _row_has(row, "im_deliver_error"):
+            derr = _clip(str(row["im_deliver_error"] or ""), _GID_ERROR_MAX)
+            if derr:
+                lines.append(f"deliver_err {derr}")
         err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
         if err:
             lines.append(err)
@@ -184,7 +210,83 @@ def _write_export_xlsx(rows: list[sqlite3.Row]) -> Path:
     return path
 
 
-def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
+def _select_active(
+    conn: sqlite3.Connection,
+    *,
+    cols: str,
+    table: str,
+    sender_id: str = "",
+    limit: int,
+) -> tuple[int, list[sqlite3.Row]]:
+    placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
+    statuses = tuple(sorted(ACTIVE_STATUSES))
+    if sender_id:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM {table} "
+            f"WHERE status IN ({placeholders}) AND im_sender_id=?",
+            (*statuses, sender_id),
+        ).fetchone()[0]
+        rows = list(
+            conn.execute(
+                f"SELECT {cols} FROM {table} "
+                f"WHERE status IN ({placeholders}) AND im_sender_id=? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (*statuses, sender_id, limit),
+            ).fetchall()
+        )
+    else:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE status IN ({placeholders})",
+            statuses,
+        ).fetchone()[0]
+        rows = list(
+            conn.execute(
+                f"SELECT {cols} FROM {table} "
+                f"WHERE status IN ({placeholders}) "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (*statuses, limit),
+            ).fetchall()
+        )
+    return int(total), rows
+
+
+def _query_gid_rows(
+    conn: sqlite3.Connection, *, cols: str, table: str, gid: str
+) -> list[sqlite3.Row]:
+    exact = list(
+        conn.execute(
+            f"SELECT {cols} FROM {table} WHERE task_id=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (gid,),
+        ).fetchall()
+    )
+    if exact:
+        return exact
+    pattern = _like_pattern(gid)
+    try:
+        return list(
+            conn.execute(
+                f"SELECT {cols} FROM {table} "
+                "WHERE filename LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (pattern, pattern, _GID_ROW_CAP),
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        # Older sqlite without ESCAPE path still works for plain tokens.
+        return list(
+            conn.execute(
+                f"SELECT {cols} FROM {table} "
+                "WHERE filename LIKE ? OR url LIKE ? "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (pattern, pattern, _GID_ROW_CAP),
+            ).fetchall()
+        )
+
+
+def run_ledger_query(
+    cmd: OpsCommand, *, sender_id: str = ""
+) -> LedgerQueryResult:
     if cmd.kind == "help":
         return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
 
@@ -210,26 +312,51 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
     export_cols = ", ".join(_EXPORT_COLS)
     table = _tasks_table()
     try:
+        if cmd.kind == "query_mine":
+            asker = (sender_id or "").strip()
+            if not asker:
+                return LedgerQueryResult(
+                    ok=False,
+                    message="无法识别提问人，请用钉钉账号重新 @ 机器人后再 query mine",
+                )
+            try:
+                total, rows = _select_active(
+                    conn,
+                    cols=display_cols,
+                    table=table,
+                    sender_id=asker,
+                    limit=_PROGRESS_ROW_CAP,
+                )
+            except sqlite3.OperationalError:
+                return LedgerQueryResult(
+                    ok=False,
+                    message="tasks 表缺少 im_sender_id，无法 query mine",
+                )
+            return LedgerQueryResult(
+                ok=True,
+                message=_format_progress(
+                    rows,
+                    total,
+                    header=f"mine: {total} active (sender={asker})",
+                ),
+                row_count=len(rows),
+                truncated=total > len(rows),
+            )
+
         if cmd.kind == "query_progress":
-            placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
-            statuses = tuple(sorted(ACTIVE_STATUSES))
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE status IN ({placeholders})",
-                statuses,
-            ).fetchone()[0]
-            rows = list(
-                conn.execute(
-                    f"SELECT {display_cols} FROM {table} "
-                    f"WHERE status IN ({placeholders}) "
-                    "ORDER BY updated_at DESC LIMIT ?",
-                    (*statuses, _PROGRESS_ROW_CAP),
-                ).fetchall()
+            total, rows = _select_active(
+                conn,
+                cols=display_cols,
+                table=table,
+                limit=_PROGRESS_ROW_CAP,
             )
             return LedgerQueryResult(
                 ok=True,
-                message=_format_progress(rows, int(total)),
+                message=_format_progress(
+                    rows, total, header=f"progress: {total} active"
+                ),
                 row_count=len(rows),
-                truncated=int(total) > len(rows),
+                truncated=total > len(rows),
             )
 
         if cmd.kind == "query_status":
@@ -271,30 +398,49 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                     ok=False,
                     message=f"gid is required.\n{config.OPS_TEMPLATE}",
                 )
-            rows = list(
-                conn.execute(
-                    f"SELECT {gid_cols} FROM {table} "
-                    "WHERE task_id=? OR filename=? OR url=? "
-                    "ORDER BY updated_at DESC LIMIT 5",
-                    (gid, gid, gid),
-                ).fetchall()
-            )
+            try:
+                rows = _query_gid_rows(
+                    conn, cols=gid_cols, table=table, gid=gid
+                )
+            except sqlite3.OperationalError:
+                # Schema without im_deliver_error: drop that column.
+                slim = ", ".join(c for c in _GID_COLS if c != "im_deliver_error")
+                rows = _query_gid_rows(
+                    conn, cols=slim, table=table, gid=gid
+                )
             if not rows:
                 return LedgerQueryResult(
                     ok=True, message=f"not found: {gid}", row_count=0
                 )
+            msg = _format_gid(rows)
+            if len(rows) >= _GID_ROW_CAP:
+                msg += f"\n… capped at {_GID_ROW_CAP}, refine query or use export"
             return LedgerQueryResult(
-                ok=True, message=_format_gid(rows), row_count=len(rows)
+                ok=True, message=msg, row_count=len(rows)
             )
 
         if cmd.kind == "query_export":
-            rows = list(
-                conn.execute(
-                    f"SELECT {export_cols} FROM {table} "
-                    "ORDER BY updated_at DESC LIMIT ?",
-                    (_EXPORT_HARD_CAP + 1,),
-                ).fetchall()
-            )
+            try:
+                rows = list(
+                    conn.execute(
+                        f"SELECT {export_cols} FROM {table} "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (_EXPORT_HARD_CAP + 1,),
+                    ).fetchall()
+                )
+            except sqlite3.OperationalError:
+                slim_export = ", ".join(
+                    c
+                    for c in _EXPORT_COLS
+                    if c not in ("im_sender_id", "im_deliver_error")
+                )
+                rows = list(
+                    conn.execute(
+                        f"SELECT {slim_export} FROM {table} "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (_EXPORT_HARD_CAP + 1,),
+                    ).fetchall()
+                )
             truncated = len(rows) > _EXPORT_HARD_CAP
             if truncated:
                 rows = rows[:_EXPORT_HARD_CAP]

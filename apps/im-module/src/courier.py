@@ -10,18 +10,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
-from announce_chat import resolve_announce_chat, save_learned_chat
+from announce_chat import add_announce_chat, resolve_announce_chats
 from channels.base import Channel, IncomingChat
+from delivery_audit import append_delivery_event
 from inbox_writer import new_request_id, write_inbox_json
 from ops_commands import parse_ops_command
 from parser import parse_task_message
 from task_ledger_query import run_ledger_query
 
 _log = logging.getLogger(__name__)
+_DELIVER_ERR_MAX = 400
 
 
 def _terminal_for(spec) -> tuple[str, ...]:
     return tuple(sorted(spec.terminal_statuses))
+
+
+def _clip_err(text: str) -> str:
+    s = " ".join(str(text or "").split())
+    if len(s) <= _DELIVER_ERR_MAX:
+        return s
+    return s[: _DELIVER_ERR_MAX - 1] + "…"
 
 
 class Courier:
@@ -77,22 +86,26 @@ class Courier:
                 pass
 
     def _announce(self, text: str) -> bool:
-        chat_id = resolve_announce_chat(
+        """Broadcast lifecycle notice to all known groups (not task delivery)."""
+        chat_ids = resolve_announce_chats(
             pinned=config.ANNOUNCE_CHAT_ID,
             state_path=Path(config.ANNOUNCE_CHAT_STATE),
         )
-        if not chat_id:
+        if not chat_ids:
             _log.info(
                 "announce skipped (no chat yet); "
-                "will learn from first @mention unless ANNOUNCE_CHAT_ID is pinned"
+                "will learn from @mentions or use ANNOUNCE_CHAT_ID"
             )
             return False
-        try:
-            self._channel.reply_text(chat_id, text)
-            return True
-        except Exception:
-            _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
-            return False
+        ok = False
+        for chat_id in chat_ids:
+            try:
+                # Broadcast only — never @ a user on online/offline/fault.
+                self._channel.reply_text(chat_id, text, at_user_ids=[])
+                ok = True
+            except Exception:
+                _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
+        return ok
 
     def _announce_online(self) -> None:
         if self._online_announced:
@@ -103,11 +116,19 @@ class Courier:
             self._check_core_health()
 
     def _remember_chat(self, chat_id: str) -> None:
-        if (config.ANNOUNCE_CHAT_ID or "").strip():
+        """Accumulate groups for lifecycle broadcast; never used for task results."""
+        added = add_announce_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
+        if not added:
             return
-        changed = save_learned_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
-        if changed and not self._online_announced:
+        if not self._online_announced:
             self._announce_online()
+            return
+        # New group after bot already online — greet this chat only.
+        text = f"{config.pick_bot_online()}\n\n{config.OPS_TEMPLATE}"
+        try:
+            self._channel.reply_text(chat_id, text, at_user_ids=[])
+        except Exception:
+            _log.exception("announce online to new chat failed chat_id=%s", chat_id)
 
     def _announce_offline_once(self) -> None:
         if self._offline_announced:
@@ -127,7 +148,12 @@ class Courier:
                     chat_id, config.pick_greet(), at_user_ids=at_ids
                 )
                 return
-            self._handle_ops(chat_id, cmd, at_user_ids=at_ids)
+            self._handle_ops(
+                chat_id,
+                cmd,
+                sender_id=incoming.sender_id,
+                at_user_ids=at_ids,
+            )
             return
         payload = parse_task_message(text)
         if payload is None:
@@ -144,8 +170,10 @@ class Courier:
             at_user_ids=at_ids,
         )
 
-    def _handle_ops(self, chat_id: str, cmd, *, at_user_ids=None) -> None:
-        result = run_ledger_query(cmd)
+    def _handle_ops(
+        self, chat_id: str, cmd, *, sender_id: str = "", at_user_ids=None
+    ) -> None:
+        result = run_ledger_query(cmd, sender_id=sender_id)
         self._channel.reply_text(
             chat_id, result.message, at_user_ids=at_user_ids
         )
@@ -253,25 +281,58 @@ class Courier:
             task_id = str(done.get("task_id") or "")
             if not task_id:
                 continue
+            table = str(done.get("_tasks_table") or config.TASKS_TABLE)
             chat_id = _resolve_delivery_chat(done)
             if not chat_id:
                 if task_id not in self._missing_chat_warned:
                     self._missing_chat_warned.add(task_id)
                     _log.warning(
-                        "skip deliver %s: no im_chat_id and no announce chat",
+                        "skip deliver %s: missing im_chat_id (fail-closed)",
                         task_id,
+                    )
+                    self._audit(
+                        done,
+                        chat_id="",
+                        channel="-",
+                        outcome="missing_im_chat_id",
+                        error="im_chat_id empty; refuse announce fallback",
+                    )
+                    _set_deliver_error(
+                        task_id,
+                        "missing im_chat_id",
+                        table=table,
                     )
                 continue
             if self._deliver_done(chat_id, done):
-                _mark_delivered(
-                    task_id,
-                    table=str(done.get("_tasks_table") or config.TASKS_TABLE),
-                )
                 self._missing_chat_warned.discard(task_id)
+
+    def _audit(
+        self,
+        done: dict,
+        *,
+        chat_id: str,
+        channel: str,
+        outcome: str,
+        error: str = "",
+    ) -> None:
+        append_delivery_event(
+            Path(config.DELIVERY_AUDIT_PATH),
+            {
+                "task_id": str(done.get("task_id") or ""),
+                "module": str(done.get("_module_id") or ""),
+                "chat_id": chat_id,
+                "sender_id": str(done.get("im_sender_id") or ""),
+                "status": str(done.get("status") or ""),
+                "channel": channel,
+                "outcome": outcome,
+                "error": error,
+            },
+        )
 
     def _deliver_done(self, chat_id: str, done: dict) -> bool:
         st = str(done.get("status") or "")
         task_id = str(done.get("task_id") or "")
+        table = str(done.get("_tasks_table") or config.TASKS_TABLE)
         label = str(done.get("label") or done.get("filename") or task_id)
         sender = str(done.get("im_sender_id") or "").strip()
         at_ids = [sender] if sender else None
@@ -280,29 +341,54 @@ class Courier:
             if not zip_path.is_file():
                 if _age_since_finish_sec(done) < config.ZIP_WAIT_SEC:
                     return False
-                self._channel.reply_text(
-                    chat_id,
-                    f"任务成功但结果文件超时未出现：{label} ({zip_path.name or '-'})",
-                    at_user_ids=at_ids,
+                try:
+                    self._channel.reply_text(
+                        chat_id,
+                        f"任务成功但结果文件超时未出现：{label} "
+                        f"({zip_path.name or '-'}) task_id={task_id}",
+                        at_user_ids=at_ids,
+                    )
+                except Exception as exc:
+                    _log.exception("deliver timeout notice failed task_id=%s", task_id)
+                    self._audit(
+                        done,
+                        chat_id=chat_id,
+                        channel="reply",
+                        outcome="zip_missing_notice_failed",
+                        error=str(exc),
+                    )
+                    _set_deliver_error(task_id, str(exc), table=table)
+                    return False
+                _mark_delivered(task_id, table=table, deliver_error="")
+                self._audit(
+                    done,
+                    chat_id=chat_id,
+                    channel="reply",
+                    outcome="zip_missing_timeout",
                 )
                 return True
+
+            file_sent = False
             try:
                 self._channel.send_file(chat_id, zip_path)
-                self._channel.reply_text(
-                    chat_id,
-                    f"结果已发送：{zip_path.name} ({label})",
-                    at_user_ids=at_ids,
-                )
-                self._deliver_fail_warned.discard(task_id)
-                return True
+                file_sent = True
             except Exception as exc:
                 _log.exception("deliver file failed task_id=%s", task_id)
+                err = _clip_err(str(exc))
+                _set_deliver_error(task_id, err, table=table)
+                self._audit(
+                    done,
+                    chat_id=chat_id,
+                    channel="file",
+                    outcome="file_failed",
+                    error=err,
+                )
                 if task_id not in self._deliver_fail_warned:
                     self._deliver_fail_warned.add(task_id)
                     try:
                         self._channel.reply_text(
                             chat_id,
-                            f"发送结果失败：{label}\n{exc}",
+                            f"发送结果失败：{label} task_id={task_id}\n{exc}",
                             at_user_ids=at_ids,
                         )
                     except Exception:
@@ -310,23 +396,73 @@ class Courier:
                             "deliver failure notice failed task_id=%s", task_id
                         )
                 return False
+
+            text_err = ""
+            try:
+                self._channel.reply_text(
+                    chat_id,
+                    f"结果已发送：{zip_path.name} ({label}) task_id={task_id}",
+                    at_user_ids=at_ids,
+                )
+            except Exception as exc:
+                text_err = _clip_err(str(exc))
+                _log.exception(
+                    "deliver text failed after file ok task_id=%s", task_id
+                )
+
+            if file_sent and text_err:
+                _mark_delivered(task_id, table=table, deliver_error=text_err)
+                self._audit(
+                    done,
+                    chat_id=chat_id,
+                    channel="file+reply",
+                    outcome="file_ok_text_failed",
+                    error=text_err,
+                )
+                self._deliver_fail_warned.discard(task_id)
+                return True
+
+            _mark_delivered(task_id, table=table, deliver_error="")
+            self._audit(
+                done,
+                chat_id=chat_id,
+                channel="file+reply",
+                outcome="ok",
+            )
+            self._deliver_fail_warned.discard(task_id)
+            return True
+
         err = done.get("error") or st
-        self._channel.reply_text(
-            chat_id,
-            f"任务结束：{label}\n{st}\n{err}",
-            at_user_ids=at_ids,
+        try:
+            self._channel.reply_text(
+                chat_id,
+                f"任务结束：{label}\n{st}\n{err}\ntask_id={task_id}",
+                at_user_ids=at_ids,
+            )
+        except Exception as exc:
+            _log.exception("deliver terminal text failed task_id=%s", task_id)
+            self._audit(
+                done,
+                chat_id=chat_id,
+                channel="reply",
+                outcome="terminal_text_failed",
+                error=str(exc),
+            )
+            _set_deliver_error(task_id, str(exc), table=table)
+            return False
+        _mark_delivered(task_id, table=table, deliver_error="")
+        self._audit(
+            done,
+            chat_id=chat_id,
+            channel="reply",
+            outcome="ok",
         )
         return True
 
 
 def _resolve_delivery_chat(done: dict) -> str:
-    chat = str(done.get("im_chat_id") or "").strip()
-    if chat:
-        return chat
-    return resolve_announce_chat(
-        pinned=config.ANNOUNCE_CHAT_ID,
-        state_path=Path(config.ANNOUNCE_CHAT_STATE),
-    )
+    """Task results only go to the recorded chat — never announce fallback."""
+    return str(done.get("im_chat_id") or "").strip()
 
 
 def _age_since_finish_sec(done: dict) -> float:
@@ -400,19 +536,60 @@ def _list_undelivered() -> list[dict]:
         conn.close()
 
 
-def _mark_delivered(task_id: str, *, table: str | None = None) -> None:
+def _set_deliver_error(
+    task_id: str, error: str, *, table: str | None = None
+) -> None:
     db = Path(config.TASKS_DB)
     if not db.is_file():
         return
     tbl = table or config.TASKS_TABLE
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    err = _clip_err(error)
     conn = sqlite3.connect(str(db), timeout=30.0)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            f"UPDATE {tbl} SET im_delivered_at=?, updated_at=? WHERE task_id=?",
-            (now, now, task_id),
-        )
+        try:
+            conn.execute(
+                f"UPDATE {tbl} SET im_deliver_error=?, updated_at=? WHERE task_id=?",
+                (err, now, task_id),
+            )
+        except sqlite3.OperationalError:
+            # Column may be missing on very old DBs until Module A migrates.
+            pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        _log.exception("set im_deliver_error failed task_id=%s", task_id)
+    finally:
+        conn.close()
+
+
+def _mark_delivered(
+    task_id: str,
+    *,
+    table: str | None = None,
+    deliver_error: str = "",
+) -> None:
+    db = Path(config.TASKS_DB)
+    if not db.is_file():
+        return
+    tbl = table or config.TASKS_TABLE
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    err = _clip_err(deliver_error) if deliver_error else ""
+    conn = sqlite3.connect(str(db), timeout=30.0)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                f"UPDATE {tbl} SET im_delivered_at=?, im_deliver_error=?, "
+                "updated_at=? WHERE task_id=?",
+                (now, err, now, task_id),
+            )
+        except sqlite3.OperationalError:
+            conn.execute(
+                f"UPDATE {tbl} SET im_delivered_at=?, updated_at=? WHERE task_id=?",
+                (now, now, task_id),
+            )
         conn.commit()
     except Exception:
         conn.rollback()

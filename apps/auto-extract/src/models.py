@@ -28,6 +28,7 @@ class Task:
     im_delivered_at: str = ""
     im_chat_id: str = ""
     im_sender_id: str = ""
+    im_deliver_error: str = ""
 
 
 @dataclass

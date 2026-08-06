@@ -204,6 +204,11 @@ class DingTalkChannel:
                     text,
                     at_user_ids=at_ids or None,
                 )
+                _log.info(
+                    "dingtalk reply channel=session chat_id=%s at=%s",
+                    chat_id,
+                    at_ids or "-",
+                )
                 return
             except Exception:
                 _log.exception(
@@ -218,8 +223,35 @@ class DingTalkChannel:
         try:
             if target.kind == "group":
                 self._api.send_group_text(target.value, text)
+                # OpenAPI group send cannot @; OTO compensates when needed.
+                if at_ids:
+                    oto_text = f"[任务回传]\n{text}"
+                    for uid in at_ids:
+                        try:
+                            self._api.send_oto_text(uid, oto_text)
+                        except Exception:
+                            _log.exception(
+                                "dingtalk OTO notify failed chat_id=%s user=%s",
+                                chat_id,
+                                uid,
+                            )
+                    _log.info(
+                        "dingtalk reply channel=openapi+oto chat_id=%s at=%s",
+                        chat_id,
+                        at_ids,
+                    )
+                else:
+                    _log.info(
+                        "dingtalk reply channel=openapi chat_id=%s at=-",
+                        chat_id,
+                    )
             elif target.kind == "oto":
                 self._api.send_oto_text(target.value, text)
+                _log.info(
+                    "dingtalk reply channel=oto chat_id=%s at=%s",
+                    chat_id,
+                    at_ids or "-",
+                )
             else:
                 raise ValueError(f"unknown session kind {target.kind}")
         except Exception:

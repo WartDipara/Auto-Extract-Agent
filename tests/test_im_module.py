@@ -502,3 +502,252 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     ]
     online_idxs = [i for i, (_, t) in enumerate(ch.texts) if "用法" in t]
     assert down_idxs and online_idxs and down_idxs[0] > online_idxs[0]
+
+
+def test_announce_chat_accumulates_groups(tmp_path):
+    from announce_chat import (
+        add_announce_chat,
+        load_learned_chats,
+        resolve_announce_chats,
+    )
+
+    path = tmp_path / "announce.json"
+    assert add_announce_chat(path, "group:A") is True
+    assert add_announce_chat(path, "group:B") is True
+    assert add_announce_chat(path, "group:A") is False
+    assert load_learned_chats(path) == ["group:A", "group:B"]
+    assert resolve_announce_chats(pinned="group:P", state_path=path) == [
+        "group:P",
+        "group:A",
+        "group:B",
+    ]
+
+
+def test_announce_broadcasts_to_all_known_chats(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "announce_chat"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    from announce_chat import add_announce_chat
+
+    class _FakeChannel:
+        def __init__(self):
+            self.texts: list[tuple[str, str]] = []
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            self.texts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    state = tmp_path / "announce.json"
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", state)
+    add_announce_chat(state, "group:A")
+    add_announce_chat(state, "group:B")
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    assert c._announce("fault-notice") is True
+    chats = {cid for cid, _ in ch.texts}
+    assert chats == {"group:A", "group:B"}
+    assert all(t == "fault-notice" for _, t in ch.texts)
+
+
+def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "delivery_audit"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    import sqlite3
+
+    class _FakeChannel:
+        def __init__(self):
+            self.texts: list = []
+            self.files: list = []
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            self.texts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            self.files.append((chat_id, Path(path).name))
+
+    db = tmp_path / "tasks.db"
+    audit = tmp_path / "delivery_audit.jsonl"
+    monkeypatch.setattr(config, "TASKS_DB", db)
+    monkeypatch.setattr(config, "DELIVERY_AUDIT_PATH", audit)
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "group:announce")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", tmp_path / "announce.json")
+    monkeypatch.setattr(config, "ZIP_WAIT_SEC", 600)
+
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY, url TEXT, label TEXT, filename TEXT,
+            status TEXT, error TEXT, result_csv TEXT, session_id TEXT,
+            buf_done_zip TEXT, source_file TEXT, adb_serial TEXT,
+            created_at TEXT, updated_at TEXT, finished_at TEXT,
+            im_delivered_at TEXT, im_chat_id TEXT, im_sender_id TEXT,
+            im_deliver_error TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "t-orphan",
+            "https://x/a.apk",
+            "g",
+            "a.apk",
+            "failed",
+            "x",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "t0",
+            "t1",
+            "2026-01-01T00:00:00Z",
+            "",
+            "",
+            "staff-1",
+            "",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    c._tick()
+    assert ch.texts == []
+    assert ch.files == []
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT im_delivered_at, im_deliver_error FROM tasks WHERE task_id=?",
+        ("t-orphan",),
+    ).fetchone()
+    conn.close()
+    assert (row[0] or "") == ""
+    assert "im_chat_id" in (row[1] or "")
+    assert audit.is_file()
+    assert "missing_im_chat_id" in audit.read_text(encoding="utf-8")
+
+
+def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "delivery_audit"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    import sqlite3
+
+    class _FakeChannel:
+        def __init__(self):
+            self.files: list = []
+            self._text_fail = True
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            pass
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            if self._text_fail:
+                raise RuntimeError("text boom")
+
+        def send_file(self, chat_id, path):
+            self.files.append((chat_id, Path(path).name))
+
+    buf = tmp_path / "buf"
+    buf.mkdir()
+    (buf / "a.bin").write_bytes(b"a")
+    db = tmp_path / "tasks.db"
+    audit = tmp_path / "delivery_audit.jsonl"
+    monkeypatch.setattr(config, "TASKS_DB", db)
+    monkeypatch.setattr(config, "DELIVERY_AUDIT_PATH", audit)
+    monkeypatch.setattr(config, "ZIP_WAIT_SEC", 600)
+
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY, url TEXT, label TEXT, filename TEXT,
+            status TEXT, error TEXT, result_csv TEXT, session_id TEXT,
+            buf_done_zip TEXT, source_file TEXT, adb_serial TEXT,
+            created_at TEXT, updated_at TEXT, finished_at TEXT,
+            im_delivered_at TEXT, im_chat_id TEXT, im_sender_id TEXT,
+            im_deliver_error TEXT
+        )
+        """
+    )
+    chat = "group:cid-x"
+    conn.execute(
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "t-1",
+            "https://x/a.apk",
+            "g",
+            "a.apk",
+            "success",
+            "",
+            "",
+            "",
+            str(buf / "a.bin"),
+            "",
+            "",
+            "t0",
+            "t1",
+            "2026-01-01T00:00:00Z",
+            "",
+            chat,
+            "staff-1",
+            "",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    c._tick()
+    assert ch.files == [(chat, "a.bin")]
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT im_delivered_at, im_deliver_error FROM tasks WHERE task_id=?",
+        ("t-1",),
+    ).fetchone()
+    conn.close()
+    assert row[0]
+    assert "text boom" in (row[1] or "")
+    c._tick()
+    assert ch.files == [(chat, "a.bin")]
+    assert "file_ok_text_failed" in audit.read_text(encoding="utf-8")

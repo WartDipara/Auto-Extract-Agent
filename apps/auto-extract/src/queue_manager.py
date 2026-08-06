@@ -44,6 +44,7 @@ def _task_to_dict(task: Task) -> dict:
         "im_delivered_at": task.im_delivered_at,
         "im_chat_id": task.im_chat_id,
         "im_sender_id": task.im_sender_id,
+        "im_deliver_error": task.im_deliver_error,
     }
 
 
