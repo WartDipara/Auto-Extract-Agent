@@ -74,6 +74,29 @@ def test_dispatch_rejects_unknown_and_empty_urls(tmp_path, monkeypatch):
         is True
     )
 
+    # Different inbox filename, same URL while still active → no second task.
+    src3 = tmp_path / "im_dup.json"
+    assert (
+        router.dispatch(
+            {
+                "get-texts": {
+                    "urls": ["https://a.apk"],
+                    "im_chat_id": "group:x",
+                }
+            },
+            src3,
+        )
+        is True
+    )
+    import sqlite3
+
+    conn = sqlite3.connect(str(tmp_path / "tasks.db"))
+    n = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE url=?", ("https://a.apk",)
+    ).fetchone()[0]
+    conn.close()
+    assert n == 1
+
 
 def test_watcher_moves_rejected_prefix(tmp_path, monkeypatch):
     _load_auto_extract()

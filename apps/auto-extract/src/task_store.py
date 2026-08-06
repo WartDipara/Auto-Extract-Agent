@@ -340,6 +340,24 @@ def has_source_file(source_file: str) -> bool:
         return row is not None
 
 
+def has_active_url(url: str) -> bool:
+    """True if a non-terminal task already owns this URL."""
+    target = (url or "").strip()
+    if not target:
+        return False
+    table = _table()
+    statuses = tuple(sorted(ACTIVE_STATUSES))
+    placeholders = ",".join("?" * len(statuses))
+    with _lock:
+        conn = _require_conn()
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE url=? AND status IN ({placeholders}) "
+            "LIMIT 1",
+            (target, *statuses),
+        ).fetchone()
+        return row is not None
+
+
 def list_by_status(*statuses: str) -> list[Task]:
     if not statuses:
         return []

@@ -86,6 +86,17 @@ def has_source_file(source_file: str) -> bool:
     return task_store.has_source_file(source_file)
 
 
+def has_active_url(url: str) -> bool:
+    return task_store.has_active_url((url or "").strip())
+
+
+def urls_already_active(urls: list) -> bool:
+    cleaned = [(u or "").strip() for u in urls if (u or "").strip()]
+    if not cleaned:
+        return False
+    return all(task_store.has_active_url(u) for u in cleaned)
+
+
 def enqueue_urls(
     urls: list, source_file: str, *, im_chat_id: str = "", im_sender_id: str = ""
 ) -> list:
@@ -102,6 +113,14 @@ def enqueue_urls(
         for url in urls:
             url = (url or "").strip()
             if not url:
+                continue
+            # Same job may arrive again via a new im_*.json while still active.
+            if task_store.has_active_url(url):
+                _log.info(
+                    "skip enqueue; url already active source=%s url=%s",
+                    source or "-",
+                    url,
+                )
                 continue
             task_id = f"t-{_state.next_seq:04d}"
             _state.next_seq += 1
