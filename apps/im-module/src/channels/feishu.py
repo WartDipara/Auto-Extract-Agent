@@ -232,6 +232,9 @@ class FeishuChannel:
     def outgoing_file_name(self, path: Path) -> str:
         return Path(path).name
 
+    def broadcast_text(self, chat_id: str, text: str) -> None:
+        self.reply_text(chat_id, text, at_user_ids=[])
+
 
 def _parse_receive(data: lark.im.v1.P2ImMessageReceiveV1) -> tuple[str, str | None]:
     event = data.event

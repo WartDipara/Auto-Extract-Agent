@@ -36,6 +36,10 @@ DINGTALK_ROBOT_CODE = (os.environ.get("DINGTALK_ROBOT_CODE") or "").strip()
 
 MODULES = list(all_modules())
 _PRIMARY = primary_module()
+_LEDGER_STATUSES = tuple(
+    sorted(_PRIMARY.active_statuses | _PRIMARY.terminal_statuses)
+)
+_LEDGER_STATUS_HELP = " / ".join(("all", *_LEDGER_STATUSES))
 
 INBOX_DIR = _PRIMARY.inbox_dir
 TASKS_DB = SHARED_TASKS_DB
@@ -46,7 +50,6 @@ ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
 POLL_SEC = 3.0
 ZIP_WAIT_SEC = 600.0
-# After this many failed deliver ticks (or non-retryable errors), abandon.
 DELIVER_MAX_ATTEMPTS = 10
 FILE_SENT_STATE = (_APP_ROOT / "state" / "file_sent.json").resolve()
 FEISHU_RECONNECT_SEC = 3.0
@@ -62,20 +65,14 @@ DINGTALK_SESSION_STATE = (
 DELIVERY_AUDIT_PATH = (_APP_ROOT / "state" / "delivery_audit.jsonl").resolve()
 PENDING_INBOX_STATE = (_APP_ROOT / "state" / "pending_inbox.json").resolve()
 SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()
-# Max times IM may rewrite a missing inbox file after core recovers.
 PENDING_INBOX_RESUBMIT_MAX = 3
-# Touch inbox files older than this while still pending (watcher may be stuck).
 PENDING_INBOX_STALE_TOUCH_SEC = 30.0
-
 CORE_HEARTBEAT_PATH = _PRIMARY.heartbeat_path
-# Background poll: announce core down after this age.
 CORE_HEARTBEAT_STALE_SEC = 15.0
-# On user submit: treat core as unavailable sooner (≈2 missed heartbeats).
 CORE_SUBMIT_STALE_SEC = 10.0
 
 BOT_NAME = "Viola"
 
-# Work-group tone: concise, status-first, no slang. Prefer「处理服务」over mixed 后台/服务器.
 MSG_BOT_ONLINE_VARIANTS = (
     f"{BOT_NAME}已上线，可以接收任务。",
     f"{BOT_NAME}已就位，请直接提交链接。",
@@ -102,7 +99,6 @@ MSG_ENQUEUE_CORE_DEFERRED_FIRST = (
 MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
     "处理服务仍在恢复中；任务已登记，恢复后将自动继续。"
 )
-# 故意保留，因爲當初創建機器人的時候沒想到不能改名！！
 OPS_TEMPLATE = (
     "用法：\n"
     "【提交任务】直接发送 APK 下载链接，可多条\n"
@@ -111,17 +107,17 @@ OPS_TEMPLATE = (
     "  ......\n"
     "\n"
     "【查询】\n"
-    f"  @{BOT_NAME} query mine              查询我提交的进行中任务\n"
-    f"  @{BOT_NAME} query progress          查询全部进行中的任务\n"
-    f"  @{BOT_NAME} query status success    按状态筛选（如 success / failed / timeout）\n"
-    f"  @{BOT_NAME} query gid t-0002        按任务号精确查询\n"
-    f"  @{BOT_NAME} query label 三国杀      按游戏名模糊查询\n"
+    f"  @{BOT_NAME} query mine              查询我提交的任务进度\n"
+    f"  @{BOT_NAME} query progress          查询全部处理中的任务\n"
+    f"  @{BOT_NAME} query status success    按状态筛选\n"
+    f"  @{BOT_NAME} query gid t-0002        按任务号查询\n"
+    f"  @{BOT_NAME} query label 三国杀      按游戏名查询\n"
     f"  @{BOT_NAME} query password          查看 .zip 解压密码\n"
     "\n"
     "【导出】\n"
     f"  @{BOT_NAME} export table all        导出文件名去重表（全部状态）\n"
     f"  @{BOT_NAME} export table success    导出指定状态的文件名去重表\n"
-    "  字段：文件名 / 游戏名 / 更新时间 / 完成时间\n"
+    f"  可选状态：{_LEDGER_STATUS_HELP}\n"
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi\n"
     "\n"

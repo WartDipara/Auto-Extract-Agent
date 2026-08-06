@@ -145,6 +145,7 @@ class DingTalkChannel:
             try:
                 asyncio.run(client.start())
             except KeyboardInterrupt:
+                self._stop.set()
                 break
             if self._stop.is_set():
                 break
@@ -219,6 +220,15 @@ class DingTalkChannel:
             with self._reply_lock:
                 self._session_replies.pop(chat_id, None)
                 self._persist_session_replies_unlocked()
+        self._reply_openapi(chat_id, text, at_ids=at_ids)
+
+    def broadcast_text(self, chat_id: str, text: str) -> None:
+        """Lifecycle broadcast: always OpenAPI so every group is reached the same way."""
+        self._reply_openapi(chat_id, text, at_ids=[])
+
+    def _reply_openapi(
+        self, chat_id: str, text: str, *, at_ids: list[str]
+    ) -> None:
         target = parse_session_key(chat_id)
         try:
             if target.kind == "group":

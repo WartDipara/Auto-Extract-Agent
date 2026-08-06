@@ -125,6 +125,8 @@ class Courier:
         self._stop = threading.Event()
         self._online_announced = False
         self._offline_announced = False
+        self._offline_lock = threading.Lock()
+        self._shutdown_requested = False
         self._core_fault_announced = False
         self._hooks_registered = False
         self._missing_chat_warned: set[str] = set()
@@ -144,14 +146,19 @@ class Courier:
         except KeyboardInterrupt:
             _log.info("im-module stopped")
         finally:
+            # Announce offline here (normal context), never inside the signal handler.
             self.stop()
 
-    def stop(self) -> None:
-        self._announce_offline_once()
+    def _request_shutdown(self) -> None:
+        """Stop stream only — no network I/O (safe from signal handler)."""
         self._stop.set()
         stopper = getattr(self._channel, "stop", None)
         if callable(stopper):
             stopper()
+
+    def stop(self) -> None:
+        self._announce_offline_once()
+        self._request_shutdown()
 
     def _register_lifecycle_hooks(self) -> None:
         if self._hooks_registered:
@@ -164,8 +171,12 @@ class Courier:
         atexit.register(_on_exit)
 
         def _on_signal(signum, _frame) -> None:
+            if self._shutdown_requested:
+                return
+            self._shutdown_requested = True
             _log.info("signal %s received, shutting down", signum)
-            self.stop()
+            # Do not announce/HTTP here — Ctrl+C re-enters and aborts mid-broadcast.
+            self._request_shutdown()
             # DingTalk SDK stream loops break on KeyboardInterrupt only.
             raise KeyboardInterrupt
 
@@ -174,6 +185,14 @@ class Courier:
                 signal.signal(sig, _on_signal)
             except (ValueError, OSError):
                 pass
+
+    def _send_lifecycle(self, chat_id: str, text: str) -> None:
+        """Lifecycle notices: prefer OpenAPI broadcast when channel supports it."""
+        broadcast = getattr(self._channel, "broadcast_text", None)
+        if callable(broadcast):
+            broadcast(chat_id, text)
+            return
+        self._channel.reply_text(chat_id, text, at_user_ids=[])
 
     def _announce(self, text: str) -> bool:
         """Broadcast lifecycle notice to all known groups (not task delivery)."""
@@ -187,15 +206,21 @@ class Courier:
                 "will learn from @mentions or use ANNOUNCE_CHAT_ID"
             )
             return False
-        ok = False
+        ok_n = 0
         for chat_id in chat_ids:
             try:
                 # Broadcast only — never @ a user on online/offline/fault.
-                self._channel.reply_text(chat_id, text, at_user_ids=[])
-                ok = True
+                self._send_lifecycle(chat_id, text)
+                ok_n += 1
             except Exception:
-                _log.exception("announce failed chat_id=%s text=%s", chat_id, text)
-        return ok
+                _log.exception("announce failed chat_id=%s", chat_id)
+        _log.info(
+            "announce done ok=%s/%s chats=%s",
+            ok_n,
+            len(chat_ids),
+            chat_ids,
+        )
+        return ok_n > 0
 
     def _announce_online(self) -> None:
         if self._online_announced:
@@ -216,15 +241,18 @@ class Courier:
         # New group after bot already online — greet this chat only.
         text = f"{config.pick_bot_online()}\n\n{config.OPS_TEMPLATE}"
         try:
-            self._channel.reply_text(chat_id, text, at_user_ids=[])
+            self._send_lifecycle(chat_id, text)
         except Exception:
             _log.exception("announce online to new chat failed chat_id=%s", chat_id)
 
     def _announce_offline_once(self) -> None:
-        if self._offline_announced:
-            return
-        self._offline_announced = True
-        self._announce(config.pick_bot_offline())
+        with self._offline_lock:
+            if self._offline_announced:
+                return
+            # Mark before send so concurrent atexit/finally cannot double-send;
+            # we only reach here after stream exit (not from the signal handler).
+            self._offline_announced = True
+            self._announce(config.pick_bot_offline())
 
     def on_message(self, incoming: IncomingChat) -> None:
         chat_id = incoming.chat_id

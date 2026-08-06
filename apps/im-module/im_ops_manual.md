@@ -215,7 +215,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | ---- | ---- |
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Announce chats | Lifecycle broadcast set: pin via `ANNOUNCE_CHAT_ID` (comma-separated OK) **plus** every group that has @'d the bot (`state/announce_chat.json` → `chat_ids`). |
-| Lifecycle | Online / offline / core-fault **broadcast to all** announce chats. Task results never use announce — only that task's `im_chat_id`. |
+| Lifecycle | Online / offline / core-fault **broadcast to all** announce chats via OpenAPI (not sessionWebhook). Offline announce runs after stream exit — never inside the Ctrl+C signal handler (re-entrant SIGINT used to abort mid-broadcast). Task results never use announce — only that task's `im_chat_id`. |
 | Core heartbeat | Each registered core writes its own `state/heartbeat` every 5s (get-texts under auto-extract). IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
 | Ledger DB | Shared file `apps/auto-extract/state/tasks.db`; **one table per module** (get-texts → `tasks`). Registry: `shared/module_registry.py`. DingTalk stores `im_sender_id` (staffId) for @-back replies. |
 | Delivery | Strict `im_chat_id` only (fail-closed). Audit: `state/delivery_audit.jsonl`; last error in `im_deliver_error`. After file send success, text failure still marks delivered (no duplicate file). DingTalk: sessionWebhook @; if expired, OpenAPI group + OTO to sender. |

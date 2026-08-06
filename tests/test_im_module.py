@@ -549,6 +549,7 @@ def test_announce_broadcasts_to_all_known_chats(tmp_path, monkeypatch):
     class _FakeChannel:
         def __init__(self):
             self.texts: list[tuple[str, str]] = []
+            self.broadcasts: list[tuple[str, str]] = []
 
         def start(self, on_message):
             pass
@@ -558,6 +559,9 @@ def test_announce_broadcasts_to_all_known_chats(tmp_path, monkeypatch):
 
         def reply_text(self, chat_id, text, *, at_user_ids=None):
             self.texts.append((chat_id, text))
+
+        def broadcast_text(self, chat_id, text):
+            self.broadcasts.append((chat_id, text))
 
         def send_file(self, chat_id, path):
             pass
@@ -570,9 +574,76 @@ def test_announce_broadcasts_to_all_known_chats(tmp_path, monkeypatch):
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
     assert c._announce("fault-notice") is True
-    chats = {cid for cid, _ in ch.texts}
+    chats = {cid for cid, _ in ch.broadcasts}
     assert chats == {"group:A", "group:B"}
-    assert all(t == "fault-notice" for _, t in ch.texts)
+    assert ch.texts == []
+    assert all(t == "fault-notice" for _, t in ch.broadcasts)
+
+
+def test_signal_shutdown_defers_offline_announce(tmp_path, monkeypatch):
+    """SIGINT must not HTTP-broadcast; stop()/finally does multi-group offline."""
+    for p in (str(_IM_SRC),):
+        if p in sys.path:
+            sys.path.remove(p)
+        sys.path.insert(0, p)
+    for name in ("config", "courier", "announce_chat"):
+        sys.modules.pop(name, None)
+
+    import config
+    import courier as courier_mod
+    from announce_chat import add_announce_chat
+
+    class _FakeChannel:
+        def __init__(self):
+            self.broadcasts: list[tuple[str, str]] = []
+            self.stop_calls = 0
+
+        def start(self, on_message):
+            pass
+
+        def stop(self):
+            self.stop_calls += 1
+
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
+            raise AssertionError("lifecycle should use broadcast_text")
+
+        def broadcast_text(self, chat_id, text):
+            self.broadcasts.append((chat_id, text))
+
+        def send_file(self, chat_id, path):
+            pass
+
+    state = tmp_path / "announce.json"
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_ID", "")
+    monkeypatch.setattr(config, "ANNOUNCE_CHAT_STATE", state)
+    add_announce_chat(state, "group:A")
+    add_announce_chat(state, "group:B")
+    ch = _FakeChannel()
+    c = courier_mod.Courier(ch)
+    c._register_lifecycle_hooks()
+
+    # Simulate first SIGINT: request shutdown only.
+    c._shutdown_requested = False
+    try:
+        # Call the registered behavior directly.
+        c._request_shutdown()
+    except Exception:
+        raise
+    assert ch.stop_calls == 1
+    assert ch.broadcasts == []
+    assert c._offline_announced is False
+
+    # Repeated shutdown request is fine.
+    c._request_shutdown()
+    assert ch.stop_calls == 2
+
+    # finally/stop path broadcasts offline to every learned group once.
+    c.stop()
+    assert c._offline_announced is True
+    assert {cid for cid, _ in ch.broadcasts} == {"group:A", "group:B"}
+    c.stop()
+    assert len(ch.broadcasts) == 2
+
 
 
 def test_deliver_fail_closed_without_im_chat_id(tmp_path, monkeypatch):

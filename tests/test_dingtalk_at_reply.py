@@ -96,6 +96,28 @@ def test_reply_text_without_at_does_not_mention_cached_sender(monkeypatch):
     assert calls == [("offline notice", [])]
 
 
+def test_broadcast_text_skips_session_uses_openapi(monkeypatch):
+    channel = DingTalkChannel("cid", "secret", robot_code="bot")
+    groups: list[str] = []
+
+    def _boom(*_a, **_k):
+        raise AssertionError("lifecycle broadcast must not use sessionWebhook")
+
+    def _group(cid, text):
+        groups.append(cid)
+        return {}
+
+    monkeypatch.setattr(channel._api, "reply_session_text", _boom)
+    monkeypatch.setattr(channel._api, "send_group_text", _group)
+    channel._session_replies["group:cid-x"] = SessionReplyTarget(
+        webhook="https://example.com/session",
+        expire_at_ms=9_999_999_999_999,
+        sender_staff_id="staff-1",
+    )
+    channel.broadcast_text("group:cid-x", "bot offline")
+    assert groups == ["cid-x"]
+
+
 def test_session_store_survives_restart(tmp_path):
     path = tmp_path / "dingtalk_session_replies.json"
     target = SessionReplyTarget(
