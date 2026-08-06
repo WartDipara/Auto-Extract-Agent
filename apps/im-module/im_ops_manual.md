@@ -103,18 +103,25 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 - Max **20** rows (newest first). Over cap → hint `export table`.
 - Invalid status → short list of allowed statuses.
 
-### 3.4 By id / label
+### 3.4 By task id
 
 ```text
 @bot query gid t-0002
-@bot query gid 三国
 ```
 
-- Match order: `task_id` (exact) → else `label` **fuzzy** (`LIKE %token%`), up to **10** rows.
+- Exact match on `task_id` only.
+
+### 3.5 By label
+
+```text
+@bot query label 三国
+```
+
+- Fuzzy match on `label` (`LIKE %token%`), up to **10** rows.
 - Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`, optional `deliver_err`.
 - Miss: `not found: …`.
 
-### 3.5 Result password
+### 3.6 Result password
 
 ```text
 @bot query password
@@ -123,7 +130,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 - Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (buf_done `.bin` pack password).
 - Reply example: `解压密码：…`
 
-### 3.6 Help
+### 3.7 Help
 
 ```text
 @bot help

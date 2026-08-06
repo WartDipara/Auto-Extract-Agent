@@ -133,7 +133,7 @@ def _format_progress(rows: list[sqlite3.Row], total: int, *, header: str) -> str
     if total > len(rows):
         body += (
             f"\n… showing {len(rows)}/{total}, "
-            "use query gid <id> or export table"
+            "use query label <name> or export table"
         )
     return _fit_budget(body)
 
@@ -153,7 +153,7 @@ def _format_list(rows: list[sqlite3.Row], *, header: str, total: int) -> str:
     if total > len(rows):
         body += (
             f"\n… showing {len(rows)}/{total}, "
-            "use query gid <id> or export table"
+            "use query label <name> or export table"
         )
     return _fit_budget(body)
 
@@ -294,19 +294,22 @@ def _select_active(
     return int(total), rows
 
 
-def _query_gid_rows(
-    conn: sqlite3.Connection, *, cols: str, table: str, gid: str
+def _query_by_task_id(
+    conn: sqlite3.Connection, *, cols: str, table: str, task_id: str
 ) -> list[sqlite3.Row]:
-    exact = list(
+    return list(
         conn.execute(
             f"SELECT {cols} FROM {table} WHERE task_id=? "
             "ORDER BY updated_at DESC LIMIT 1",
-            (gid,),
+            (task_id,),
         ).fetchall()
     )
-    if exact:
-        return exact
-    pattern = _like_pattern(gid)
+
+
+def _query_by_label(
+    conn: sqlite3.Connection, *, cols: str, table: str, label: str
+) -> list[sqlite3.Row]:
+    pattern = _like_pattern(label)
     try:
         return list(
             conn.execute(
@@ -327,6 +330,42 @@ def _query_gid_rows(
         )
 
 
+def _run_detail_query(
+    conn: sqlite3.Connection,
+    *,
+    cols: str,
+    table: str,
+    token: str,
+    by_label: bool,
+) -> LedgerQueryResult:
+    slim_cols = ", ".join(c for c in _GID_COLS if c != "im_deliver_error")
+    try:
+        if by_label:
+            rows = _query_by_label(conn, cols=cols, table=table, label=token)
+        else:
+            rows = _query_by_task_id(conn, cols=cols, table=table, task_id=token)
+    except sqlite3.OperationalError:
+        if by_label:
+            rows = _query_by_label(
+                conn, cols=slim_cols, table=table, label=token
+            )
+        else:
+            rows = _query_by_task_id(
+                conn, cols=slim_cols, table=table, task_id=token
+            )
+    if not rows:
+        return LedgerQueryResult(
+            ok=True, message=f"not found: {token}", row_count=0
+        )
+    msg = _format_gid(rows)
+    if by_label and len(rows) >= _GID_ROW_CAP:
+        msg += (
+            f"\n… capped at {_GID_ROW_CAP}, "
+            "refine query or use export table"
+        )
+    return LedgerQueryResult(ok=True, message=msg, row_count=len(rows))
+
+
 def _allowed_status_hint(*, include_all: bool = False) -> str:
     allowed = ", ".join(sorted(LEDGER_STATUSES))
     if include_all:
@@ -344,7 +383,7 @@ def _export_usage_message() -> str:
 def _query_usage_message() -> str:
     return (
         "用法：query mine | query progress | query status <status> | "
-        "query gid <id> | query password\n"
+        "query gid <task_id> | query label <游戏名> | query password\n"
         "导出请用：export table all | export table <status>"
     )
 
@@ -459,34 +498,33 @@ def run_ledger_query(
             )
 
         if cmd.kind == "query_gid":
-            gid = (cmd.arg or "").strip()
-            if not gid:
+            token = (cmd.arg or "").strip()
+            if not token:
                 return LedgerQueryResult(
                     ok=False,
-                    message="用法：query gid <task_id|label>",
+                    message="用法：query gid <task_id>",
                 )
-            try:
-                rows = _query_gid_rows(
-                    conn, cols=gid_cols, table=table, gid=gid
-                )
-            except sqlite3.OperationalError:
-                # Schema without im_deliver_error: drop that column.
-                slim = ", ".join(c for c in _GID_COLS if c != "im_deliver_error")
-                rows = _query_gid_rows(
-                    conn, cols=slim, table=table, gid=gid
-                )
-            if not rows:
+            return _run_detail_query(
+                conn,
+                cols=gid_cols,
+                table=table,
+                token=token,
+                by_label=False,
+            )
+
+        if cmd.kind == "query_label":
+            token = (cmd.arg or "").strip()
+            if not token:
                 return LedgerQueryResult(
-                    ok=True, message=f"not found: {gid}", row_count=0
+                    ok=False,
+                    message="用法：query label <游戏名>",
                 )
-            msg = _format_gid(rows)
-            if len(rows) >= _GID_ROW_CAP:
-                msg += (
-                    f"\n… capped at {_GID_ROW_CAP}, "
-                    "refine query or use export table"
-                )
-            return LedgerQueryResult(
-                ok=True, message=msg, row_count=len(rows)
+            return _run_detail_query(
+                conn,
+                cols=gid_cols,
+                table=table,
+                token=token,
+                by_label=True,
             )
 
         if cmd.kind == "export_table":

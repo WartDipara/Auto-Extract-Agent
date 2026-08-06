@@ -177,7 +177,7 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
             ),
         ],
     )
-    result = run_ledger_query(OpsCommand(kind="query_gid", arg="foo"))
+    result = run_ledger_query(OpsCommand(kind="query_label", arg="foo"))
     assert result.ok
     assert result.row_count == 2
     assert "t-1" in result.message
@@ -185,13 +185,21 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
     assert "t-3" not in result.message
     assert "deliver_err" in result.message
 
-    by_label = run_ledger_query(OpsCommand(kind="query_gid", arg="bar"))
+    by_label = run_ledger_query(OpsCommand(kind="query_label", arg="bar"))
     assert by_label.ok and by_label.row_count == 1
     assert "t-3" in by_label.message
+
+    # task_id must not be found via query label
+    wrong = run_ledger_query(OpsCommand(kind="query_label", arg="t-3"))
+    assert wrong.ok and wrong.row_count == 0
 
     exact = run_ledger_query(OpsCommand(kind="query_gid", arg="t-3"))
     assert exact.ok and exact.row_count == 1
     assert "t-3" in exact.message
+
+    # label token must not be found via query gid
+    no_gid = run_ledger_query(OpsCommand(kind="query_gid", arg="foo"))
+    assert no_gid.ok and no_gid.row_count == 0
 
 
 def test_parse_ops_query_mine():

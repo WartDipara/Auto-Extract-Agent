@@ -20,7 +20,7 @@ _GREET_RE = re.compile(
     r"[!！?？.。~～]*$",
     re.IGNORECASE,
 )
-_QUERY_MODES = frozenset({"progress", "mine", "password", "gid", "status"})
+_QUERY_MODES = frozenset({"progress", "mine", "password", "label", "status", "gid"})
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,8 @@ def parse_ops_command(text: str) -> OpsCommand | None:
         return OpsCommand(kind="query_password")
     if mode == "gid":
         return OpsCommand(kind="query_gid", arg=tail)
+    if mode == "label":
+        return OpsCommand(kind="query_label", arg=tail)
     if mode == "status":
         return OpsCommand(kind="query_status", arg=tail)
     # e.g. "query export" — query has no export subcommand.

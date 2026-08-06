@@ -320,7 +320,6 @@ class DingTalkChannel:
                 self._session_state_path,
             )
 
-
 def _extract_text(msg: ChatbotMessage) -> str | None:
     if msg.text is None or msg.text.content is None:
         return None
@@ -328,3 +327,4 @@ def _extract_text(msg: ChatbotMessage) -> str | None:
     cleaned = _AT_TOKEN_RE.sub(" ", raw)
     cleaned = " ".join(cleaned.split()).strip()
     return cleaned if cleaned else None
+
