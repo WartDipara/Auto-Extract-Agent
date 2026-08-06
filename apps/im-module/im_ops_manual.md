@@ -14,12 +14,13 @@ In group chats you must **@bot** before the body (DingTalk requires an explicit 
 | ------ | ------------ | ------------ |
 | Greeting | `你好` / `hi` / `hello` … | Self-intro + usage |
 | Enqueue extract | APK URL(s) (see 2) | Write Module A inbox; deliver result when done |
-| Query ledger | `query …` (see 3) | Text glance, or Excel via `query export` |
-| Help | `help` / `?` / bare `query` | Usage summary |
-| Other | Free text | `没看懂这条指令` + usage |
+| Query ledger | `query …` (see 3) | Text glance |
+| Export table | `export table …` (see 4) | Excel by filename (deduped) |
+| Help | `help` / `?` / bare `query` / bare `export` | Usage summary |
+| Other | Free text | Short reject; send `help` for full usage |
 
 
-Match order: ops (greet/query/help) → enqueue (URLs or legacy JSON) → otherwise reject.
+Match order: ops (greet/query/export/help) → enqueue (URLs or legacy JSON) → otherwise reject.
 
 ---
 
@@ -71,7 +72,7 @@ Ledger statuses: section 4. Pipeline runs inside Module A.
 
 Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
 Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** when shown).
-Full dump uses **`query export`** (Excel `.xlsx` file).
+Excel export is a **separate** command: `export table` (section 4).
 
 Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`, delivery time, whether `.bin` exists, `session`, `adb`.
 
@@ -82,7 +83,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 ```
 
 - Non-terminal statuses only, filtered by `im_sender_id` = current asker.
-- Max **30** rows; if more: `showing 30/N` + hint `query export`.
+- Max **30** rows; if more: `showing 30/N` + hint `export table`.
 
 ### 3.2 Progress (all active)
 
@@ -91,7 +92,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 ```
 
 - Non-terminal statuses only (`queued` … `extract_done`), **entire ledger**.
-- Max **30** rows (internal limit); if more: `showing 30/N` + hint `query export`.
+- Max **30** rows (internal limit); if more: `showing 30/N` + hint `export table`.
 
 ### 3.3 By status
 
@@ -99,52 +100,58 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 @bot query status timeout
 ```
 
-- Max **20** rows (newest first). Over cap → hint `query export`.
+- Max **20** rows (newest first). Over cap → hint `export table`.
+- Invalid status → short list of allowed statuses.
 
-### 3.4 By id / filename / URL
+### 3.4 By id / label
 
 ```text
 @bot query gid t-0002
-@bot query gid 17498_....apk
-@bot query gid https://.../game.apk
+@bot query gid 三国
 ```
 
-- Match order: `task_id` (exact) → else `filename` / `url` **fuzzy** (`LIKE %token%`), up to **10** rows.
+- Match order: `task_id` (exact) → else `label` **fuzzy** (`LIKE %token%`), up to **10** rows.
 - Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`, optional `deliver_err`.
 - Miss: `not found: …`.
 
-### 3.5 Export full table
-
-```text
-@bot query export
-```
-
-- Excel columns: `task_id,label,status,error,url,filename,im_chat_id,im_sender_id,session_id,adb_serial,im_delivered_at,im_deliver_error,updated_at,finished_at` (UTC).
-- Hard cap 50000 rows; truncated exports note `truncated=true`.
-- Feishu sends the file; DingTalk may fall back to a local path hint.
-
-### 3.6 Result password
+### 3.5 Result password
 
 ```text
 @bot query password
 ```
 
 - Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (buf_done `.bin` pack password).
-- Reply example: `password is '…' , 将bin文件用zip解压`
+- Reply example: `解压密码：…`
 
-### 3.7 Help
+### 3.6 Help
 
 ```text
 @bot help
 @bot ?
 @bot query
+@bot export
 ```
-
-Not exposed: `query all` / `query top_n` (removed; limits are internal).
 
 ---
 
-## 4. Task status (ledger)
+## 4. Export table
+
+```text
+@bot export table all
+@bot export table success
+```
+
+- Unique by `filename` (latest `updated_at` wins).
+- Columns: `filename`, `label`, `updated_at`, `finished_at`.
+- Times in **Asia/Shanghai** as `YYYY-mm-DD: HH:mm`.
+- `all` = every status; otherwise filter by ledger status.
+- Invalid status → short allowed-status hint (includes `all`).
+- Hard cap 50000 unique filenames.
+- `query export` is retired and redirects to this command.
+
+---
+
+## 5. Ledger statuses
 
 Status is written only at stage boundaries (not progress percentages).
 
@@ -167,10 +174,11 @@ Status is written only at stage boundaries (not progress percentages).
 
 
 Chat shows a slim subset; full fields remain in `tasks.db`.
+`query all` / `query top_n` are unsupported (limits are internal).
 
 ---
 
-## 5. Explicitly unsupported
+## 6. Explicitly unsupported
 
 - `@bot 同步` / Feishu Bitable / DingTalk group spreadsheet → **deprecated**
 - Arbitrary user SQL
@@ -178,7 +186,7 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 
 ---
 
-## 6. Ops notes (not chat protocol)
+## 7. Ops notes (not chat protocol)
 
 
 | Item | Note |

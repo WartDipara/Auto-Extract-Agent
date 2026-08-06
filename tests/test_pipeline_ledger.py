@@ -175,7 +175,8 @@ def test_ops_commands_parse():
 
     importlib.reload(ops_commands)
     assert ops_commands.parse_ops_command("query progress").kind == "query_progress"
-    assert ops_commands.parse_ops_command("query export").kind == "help"
+    assert ops_commands.parse_ops_command("query export").kind == "export_usage"
+    assert ops_commands.parse_ops_command("export aaa").kind == "export_usage"
     assert ops_commands.parse_ops_command("export table all").kind == "export_table"
     assert ops_commands.parse_ops_command("export table all").arg == "all"
     assert ops_commands.parse_ops_command("export table success").arg == "success"
@@ -183,12 +184,13 @@ def test_ops_commands_parse():
     assert ops_commands.parse_ops_command("query password").kind == "query_password"
     assert ops_commands.parse_ops_command("query gid t-1").arg == "t-1"
     assert ops_commands.parse_ops_command("query status success").arg == "success"
+    assert ops_commands.parse_ops_command("query foo").kind == "query_usage"
     assert ops_commands.parse_ops_command("help").kind == "help"
     assert ops_commands.parse_ops_command("你好").kind == "greet"
     assert ops_commands.parse_ops_command("你好呀！").kind == "greet"
     assert ops_commands.parse_ops_command("Hello").kind == "greet"
-    assert ops_commands.parse_ops_command("query all").kind == "help"
-    assert ops_commands.parse_ops_command("query top_n 20").kind == "help"
+    assert ops_commands.parse_ops_command("query all").kind == "query_usage"
+    assert ops_commands.parse_ops_command("query top_n 20").kind == "query_usage"
     assert ops_commands.parse_ops_command("查询表格 all") is None
     assert ops_commands.parse_ops_command('{"get-texts":{"urls":["x"]}}') is None
 
@@ -336,7 +338,6 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         "label",
         "updated_at",
         "finished_at",
-        "url",
     )
     body = sheet_rows[1:]
     assert any(r[0] == "a.apk" and r[1] == "Game" for r in body)
@@ -350,6 +351,14 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     )
     assert success_only.ok and success_only.row_count == 1
     assert "status=success" in success_only.message
+
+    bad_shape = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_usage")
+    )
+    assert not bad_shape.ok
+    assert "export table all" in bad_shape.message
+    assert "状态不合法" in bad_shape.message
+    assert "【提交任务】" not in bad_shape.message
 
     bad = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_table", arg="nope")

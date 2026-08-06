@@ -20,6 +20,7 @@ _GREET_RE = re.compile(
     r"[!！?？.。~～]*$",
     re.IGNORECASE,
 )
+_QUERY_MODES = frozenset({"progress", "mine", "password", "gid", "status"})
 
 
 @dataclass(frozen=True)
@@ -46,10 +47,11 @@ def parse_ops_command(text: str) -> OpsCommand | None:
         parts = rest.split(None, 1)
         mode = parts[0].lower()
         tail = parts[1].strip() if len(parts) > 1 else ""
+        # Only valid form: export table <all|status>
         if mode == "table":
-            # export table all | export table success | ...
             return OpsCommand(kind="export_table", arg=tail.lower())
-        return OpsCommand(kind="help")
+        # e.g. "export aaa" — recognized as export, but invalid shape.
+        return OpsCommand(kind="export_usage")
 
     m = _QUERY_HEAD.match(raw)
     if not m:
@@ -70,7 +72,11 @@ def parse_ops_command(text: str) -> OpsCommand | None:
         return OpsCommand(kind="query_gid", arg=tail)
     if mode == "status":
         return OpsCommand(kind="query_status", arg=tail)
-    # query export is retired — query and export are independent.
+    # e.g. "query export" — query has no export subcommand.
+    if mode == "export" or mode not in _QUERY_MODES:
+        if mode == "export":
+            return OpsCommand(kind="export_usage")
+        return OpsCommand(kind="query_usage")
     return OpsCommand(kind="help")
 
 

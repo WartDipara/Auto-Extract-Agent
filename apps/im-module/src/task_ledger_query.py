@@ -35,7 +35,6 @@ _EXPORT_TABLE_COLS = (
     "label",
     "updated_at",
     "finished_at",
-    "url",
 )
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _CHAR_BUDGET = 3500
@@ -312,19 +311,18 @@ def _query_gid_rows(
         return list(
             conn.execute(
                 f"SELECT {cols} FROM {table} "
-                "WHERE filename LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' "
+                "WHERE label LIKE ? ESCAPE '\\' "
                 "ORDER BY updated_at DESC LIMIT ?",
-                (pattern, pattern, _GID_ROW_CAP),
+                (pattern, _GID_ROW_CAP),
             ).fetchall()
         )
     except sqlite3.OperationalError:
-        # Older sqlite without ESCAPE path still works for plain tokens.
         return list(
             conn.execute(
                 f"SELECT {cols} FROM {table} "
-                "WHERE filename LIKE ? OR url LIKE ? "
+                "WHERE label LIKE ? "
                 "ORDER BY updated_at DESC LIMIT ?",
-                (pattern, pattern, _GID_ROW_CAP),
+                (pattern, _GID_ROW_CAP),
             ).fetchall()
         )
 
@@ -332,10 +330,23 @@ def _query_gid_rows(
 def _allowed_status_hint(*, include_all: bool = False) -> str:
     allowed = ", ".join(sorted(LEDGER_STATUSES))
     if include_all:
-        return (
-            f"状态不合法。可用：all（全部），或 {allowed}"
-        )
+        return f"状态不合法。可用：all（全部），或 {allowed}"
     return f"状态不合法。可用：{allowed}"
+
+
+def _export_usage_message() -> str:
+    return (
+        "用法：export table all | export table <status>\n"
+        f"{_allowed_status_hint(include_all=True)}"
+    )
+
+
+def _query_usage_message() -> str:
+    return (
+        "用法：query mine | query progress | query status <status> | "
+        "query gid <id> | query password\n"
+        "导出请用：export table all | export table <status>"
+    )
 
 
 def run_ledger_query(
@@ -343,6 +354,12 @@ def run_ledger_query(
 ) -> LedgerQueryResult:
     if cmd.kind == "help":
         return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
+
+    if cmd.kind == "export_usage":
+        return LedgerQueryResult(ok=False, message=_export_usage_message())
+
+    if cmd.kind == "query_usage":
+        return LedgerQueryResult(ok=False, message=_query_usage_message())
 
     if cmd.kind == "query_password":
         password = (config.ZIP_PASSWORD or "").strip()
@@ -446,7 +463,7 @@ def run_ledger_query(
             if not gid:
                 return LedgerQueryResult(
                     ok=False,
-                    message=f"gid is required.\n{config.OPS_TEMPLATE}",
+                    message="用法：query gid <task_id|label>",
                 )
             try:
                 rows = _query_gid_rows(
@@ -477,10 +494,7 @@ def run_ledger_query(
             if not scope:
                 return LedgerQueryResult(
                     ok=False,
-                    message=(
-                        "用法：export table all | export table <status>\n"
-                        f"{_allowed_status_hint(include_all=True)}"
-                    ),
+                    message=_export_usage_message(),
                 )
             if scope != "all" and not is_valid_ledger_status(scope):
                 return LedgerQueryResult(
@@ -527,6 +541,6 @@ def run_ledger_query(
                 truncated=truncated,
             )
 
-        return LedgerQueryResult(ok=False, message=config.OPS_TEMPLATE)
+        return LedgerQueryResult(ok=False, message=_query_usage_message())
     finally:
         conn.close()

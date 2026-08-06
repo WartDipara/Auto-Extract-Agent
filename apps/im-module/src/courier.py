@@ -221,7 +221,9 @@ class Courier:
         if payload is None:
             self._channel.reply_text(
                 chat_id,
-                f"未能识别该指令。\n{config.OPS_TEMPLATE}",
+                "未能识别该指令。发送 help 查看用法；"
+                "或 query … / export table …；"
+                "提交任务请直接发 APK 链接。",
                 at_user_ids=at_ids,
             )
             return

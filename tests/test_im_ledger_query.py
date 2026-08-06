@@ -126,11 +126,11 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
         [
             (
                 "t-1",
-                "g1",
+                "foo_game",
                 "success",
                 "",
-                "https://cdn.example.com/foo_game.apk",
-                "17498_foo_game.apk",
+                "https://cdn.example.com/a.apk",
+                "a.apk",
                 "2026-01-02T00:00:02Z",
                 "d",
                 "",
@@ -143,11 +143,11 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
             ),
             (
                 "t-2",
-                "g2",
+                "foo_other",
                 "failed",
                 "boom",
-                "https://cdn.example.com/foo_other.apk",
-                "other_foo.apk",
+                "https://cdn.example.com/b.apk",
+                "b.apk",
                 "2026-01-02T00:00:01Z",
                 "",
                 "send fail",
@@ -160,11 +160,11 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
             ),
             (
                 "t-3",
-                "g3",
+                "bar_game",
                 "queued",
                 "",
-                "https://cdn.example.com/bar.apk",
-                "bar.apk",
+                "https://cdn.example.com/c.apk",
+                "c.apk",
                 "2026-01-02T00:00:00Z",
                 "",
                 "",
@@ -184,6 +184,10 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
     assert "t-2" in result.message
     assert "t-3" not in result.message
     assert "deliver_err" in result.message
+
+    by_label = run_ledger_query(OpsCommand(kind="query_gid", arg="bar"))
+    assert by_label.ok and by_label.row_count == 1
+    assert "t-3" in by_label.message
 
     exact = run_ledger_query(OpsCommand(kind="query_gid", arg="t-3"))
     assert exact.ok and exact.row_count == 1
