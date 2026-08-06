@@ -197,7 +197,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
             )
         return LedgerQueryResult(
             ok=True,
-            message=f"password is '{password}' , 将bin文件用zip解压",
+            message=f"密码是 '{password}' , 将bin文件用zip解压",
         )
 
     try:
