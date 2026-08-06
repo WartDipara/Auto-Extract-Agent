@@ -10,7 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
-from announce_chat import add_announce_chat, resolve_announce_chats
+from announce_chat import (
+    add_announce_chat,
+    remove_announce_chat,
+    resolve_announce_chats,
+)
 from channels.base import Channel, IncomingChat
 from delivery_audit import append_delivery_event
 from inbox_writer import new_request_id, write_inbox_json
@@ -68,7 +72,31 @@ def _outgoing_file_name(channel, path: Path) -> str:
     return Path(path).name
 
 
+def _is_dead_chat_error(exc: BaseException | str) -> bool:
+    if type(exc).__name__ == "DingTalkDeadChatError":
+        return True
+    text = str(exc or "").lower()
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        text = f"{text} {getattr(resp, 'text', None) or ''}"
+    try:
+        from channels.dingtalk.openapi import looks_like_dead_chat
+
+        return looks_like_dead_chat(text)
+    except Exception:
+        keys = (
+            "resource.not.found",
+            "robot 不存在",
+            "dead chat",
+            "chat gone",
+            "robot left",
+        )
+        return any(k in text for k in keys)
+
+
 def _non_retryable_deliver_error(exc: BaseException | str) -> bool:
+    if _is_dead_chat_error(exc):
+        return True
     text = str(exc or "").lower()
     keys = (
         "missing im_chat_id",
@@ -133,6 +161,7 @@ class Courier:
         self._deliver_fail_warned: set[str] = set()
         self._zip_timeout_warned: set[str] = set()
         self._pending_exhausted_warned: set[str] = set()
+        self._dead_announce_warned: set[str] = set()
         self._deliver_attempts: dict[str, int] = {}
         self._file_sent_ok: set[str] = _load_file_sent()
 
@@ -194,6 +223,55 @@ class Courier:
             return
         self._channel.reply_text(chat_id, text, at_user_ids=[])
 
+    def _drop_dead_announce_chat(self, chat_id: str) -> None:
+        """Forget dissolved / left groups so lifecycle broadcast stays healthy."""
+        removed = remove_announce_chat(Path(config.ANNOUNCE_CHAT_STATE), chat_id)
+        if removed:
+            return
+        # Pinned via env cannot be deleted from state; warn once.
+        if chat_id not in self._dead_announce_warned:
+            self._dead_announce_warned.add(chat_id)
+            _log.warning(
+                "announce chat unreachable (dissolved or robot left); "
+                "remove from ANNOUNCE_CHAT_ID if pinned: %s",
+                chat_id,
+            )
+
+    def _notify_sender_oto(self, done: dict, text: str, *, zip_path: Path | None = None) -> bool:
+        """Best-effort DM when the original group is gone."""
+        sender = str(done.get("im_sender_id") or "").strip()
+        if not sender:
+            return False
+        oto = f"oto:{sender}"
+        try:
+            self._channel.reply_text(oto, text, at_user_ids=[])
+            if zip_path is not None and zip_path.is_file():
+                self._channel.send_file(oto, zip_path)
+            return True
+        except Exception:
+            _log.exception("oto fallback failed sender=%s", sender)
+            return False
+
+    def _handle_dead_delivery_chat(
+        self,
+        done: dict,
+        *,
+        chat_id: str,
+        notice: str,
+        zip_path: Path | None = None,
+    ) -> bool:
+        self._drop_dead_announce_chat(chat_id)
+        oto_ok = self._notify_sender_oto(done, notice, zip_path=zip_path)
+        reason = "chat gone or robot left group"
+        if oto_ok:
+            reason = f"{reason}; notified sender via oto"
+        return self._abandon_delivery(
+            done,
+            chat_id=chat_id,
+            reason=reason,
+            notify=False,
+        )
+
     def _announce(self, text: str) -> bool:
         """Broadcast lifecycle notice to all known groups (not task delivery)."""
         chat_ids = resolve_announce_chats(
@@ -212,7 +290,15 @@ class Courier:
                 # Broadcast only — never @ a user on online/offline/fault.
                 self._send_lifecycle(chat_id, text)
                 ok_n += 1
-            except Exception:
+            except Exception as exc:
+                if _is_dead_chat_error(exc):
+                    _log.warning(
+                        "announce skip dead chat_id=%s: %s",
+                        chat_id,
+                        _clip_err(str(exc)),
+                    )
+                    self._drop_dead_announce_chat(chat_id)
+                    continue
                 _log.exception("announce failed chat_id=%s", chat_id)
         _log.info(
             "announce done ok=%s/%s chats=%s",
@@ -785,6 +871,22 @@ class Courier:
                     outcome="file_failed",
                     error=err,
                 )
+                if _is_dead_chat_error(exc):
+                    sent_name = _outgoing_file_name(self._channel, zip_path)
+                    return self._handle_dead_delivery_chat(
+                        done,
+                        chat_id=chat_id,
+                        notice=_user_task_card(
+                            "原群已失效/机器人已退群，结果改发到你的单聊",
+                            label=label,
+                            task_id=task_id,
+                            extra=[
+                                f"文件：{sent_name}",
+                                "解压密码可用 query password 查询。",
+                            ],
+                        ),
+                        zip_path=zip_path,
+                    )
                 if task_id not in self._deliver_fail_warned:
                     self._deliver_fail_warned.add(task_id)
                     try:
@@ -894,6 +996,20 @@ class Courier:
                 error=str(exc),
             )
             _set_deliver_error(task_id, str(exc), table=table)
+            if _is_dead_chat_error(exc):
+                return self._handle_dead_delivery_chat(
+                    done,
+                    chat_id=chat_id,
+                    notice=_user_task_card(
+                        "未能完成（原群已失效，改发到你的单聊）",
+                        label=label,
+                        task_id=task_id,
+                        extra=[
+                            f"状态：{st}",
+                            f"原因：{_clip_err(str(err))}",
+                        ],
+                    ),
+                )
             if _non_retryable_deliver_error(exc):
                 return self._abandon_delivery(
                     done,

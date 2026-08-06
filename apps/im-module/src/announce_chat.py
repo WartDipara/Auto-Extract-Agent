@@ -56,16 +56,36 @@ def add_announce_chat(path: Path, chat_id: str) -> bool:
         if cid in chats:
             return False
         chats.append(cid)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"chat_ids": chats}
-        tmp = target.with_suffix(target.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        tmp.replace(target)
+        _write_chats_unlocked(target, chats)
         _log.info("announce chat added: %s (n=%s)", cid, len(chats))
         return True
+
+
+def remove_announce_chat(path: Path, chat_id: str) -> bool:
+    """Drop a learned chat (dissolved group / robot left). Returns True if removed."""
+    cid = (chat_id or "").strip()
+    if not cid:
+        return False
+    target = Path(path)
+    with _lock:
+        chats = load_learned_chats(target)
+        if cid not in chats:
+            return False
+        chats = [c for c in chats if c != cid]
+        _write_chats_unlocked(target, chats)
+        _log.warning("announce chat removed: %s (n=%s)", cid, len(chats))
+        return True
+
+
+def _write_chats_unlocked(target: Path, chats: list[str]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"chat_ids": chats}
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(target)
 
 
 def save_learned_chat(path: Path, chat_id: str) -> bool:

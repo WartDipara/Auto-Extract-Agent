@@ -28,6 +28,31 @@ _FILE_TYPE_BY_SUFFIX = {
 }
 
 
+class DingTalkDeadChatError(RuntimeError):
+    """Group dissolved / robot removed from chat — do not retry that chat_id."""
+
+
+def looks_like_dead_chat(payload: str) -> bool:
+    """DingTalk often reports dissolved groups as robot/resource not found."""
+    text = (payload or "").lower()
+    if "resource.not.found" in text:
+        return True
+    keys = (
+        "robot 不存在",
+        "robot不存在",
+        "conversation not found",
+        "chat not found",
+        "invalid openconversationid",
+        "不在群",
+        "not in the conversation",
+        "dead chat",
+        "robot left",
+        "chat gone",
+    )
+    return any(k in text for k in keys)
+
+
+
 @dataclass(frozen=True)
 class SessionReplyTarget:
     webhook: str
@@ -239,12 +264,17 @@ class DingTalkOpenApi:
             timeout=30,
         )
         if resp.status_code >= 400:
+            body = resp.text[:500]
             _log.error(
                 "dingtalk openapi %s failed status=%s body=%s",
                 path,
                 resp.status_code,
-                resp.text[:500],
+                body,
             )
+            if looks_like_dead_chat(body):
+                raise DingTalkDeadChatError(
+                    f"dingtalk chat gone or robot left: {body}"
+                )
             resp.raise_for_status()
         data = resp.json() if resp.text else {}
         _log.info("dingtalk openapi %s ok keys=%s", path, list(data.keys()))
