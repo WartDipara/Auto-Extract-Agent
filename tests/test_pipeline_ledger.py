@@ -175,7 +175,11 @@ def test_ops_commands_parse():
 
     importlib.reload(ops_commands)
     assert ops_commands.parse_ops_command("query progress").kind == "query_progress"
-    assert ops_commands.parse_ops_command("query export").kind == "query_export"
+    assert ops_commands.parse_ops_command("query export").kind == "help"
+    assert ops_commands.parse_ops_command("export table all").kind == "export_table"
+    assert ops_commands.parse_ops_command("export table all").arg == "all"
+    assert ops_commands.parse_ops_command("export table success").arg == "success"
+    assert ops_commands.parse_ops_command("export").kind == "help"
     assert ops_commands.parse_ops_command("query password").kind == "query_password"
     assert ops_commands.parse_ops_command("query gid t-1").arg == "t-1"
     assert ops_commands.parse_ops_command("query status success").arg == "success"
@@ -260,6 +264,27 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "group:cid-a",
         ),
     )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "t-0003",
+            "https://x/a-old.apk",
+            "GameOld",
+            "a.apk",
+            "failed",
+            "old",
+            "",
+            "",
+            "",
+            "im_0.json",
+            "",
+            "2026-08-03T12:00:00Z",
+            "2026-08-03T12:00:00Z",
+            "2026-08-03T12:00:00Z",
+            "",
+            "group:cid-a",
+        ),
+    )
     conn.commit()
     conn.close()
 
@@ -295,18 +320,45 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert "adb        emulator-5554" in gid.message
 
     exported = task_ledger_query.run_ledger_query(
-        ops_commands.OpsCommand(kind="query_export")
+        ops_commands.OpsCommand(kind="export_table", arg="all")
     )
     assert exported.ok and exported.file_path and exported.file_path.is_file()
     assert exported.file_path.suffix == ".xlsx"
+    # a.apk appears twice in DB; unique keeps latest (t-0001), plus b.apk → 2
     assert exported.row_count == 2
-    assert "export 2 rows xlsx" in exported.message
+    assert "export table all" in exported.message
     from openpyxl import load_workbook
 
     wb = load_workbook(exported.file_path, read_only=True)
     sheet_rows = list(wb.active.iter_rows(values_only=True))
-    assert sheet_rows[0][0] == "task_id"
-    assert any(r[0] == "t-0001" for r in sheet_rows[1:])
+    assert sheet_rows[0] == (
+        "filename",
+        "label",
+        "updated_at",
+        "finished_at",
+        "url",
+    )
+    body = sheet_rows[1:]
+    assert any(r[0] == "a.apk" and r[1] == "Game" for r in body)
+    assert not any(r[0] == "a.apk" and r[1] == "GameOld" for r in body)
+    a_row = next(r for r in body if r[0] == "a.apk")
+    assert a_row[2] == "2026-08-04: 20:01"
+    assert a_row[3] == "2026-08-04: 20:01"
+
+    success_only = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_table", arg="success")
+    )
+    assert success_only.ok and success_only.row_count == 1
+    assert "status=success" in success_only.message
+
+    bad = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_table", arg="nope")
+    )
+    assert not bad.ok
+    assert "状态不合法" in bad.message
+    assert "all" in bad.message
+    assert "success" in bad.message
+    assert "【提交任务】" not in bad.message
 
     miss = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_gid", arg="nope")
