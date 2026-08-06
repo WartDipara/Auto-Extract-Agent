@@ -74,7 +74,10 @@ Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
 Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** when shown).
 Excel export is a **separate** command: `export table` (section 4).
 
-Text columns: `task_id`, `label`, `status`; failure lists may append a short `error`; `query gid` also shows Shanghai `updated_at`, delivery time, whether `.bin` exists, `session`, `adb`.
+Text columns for list/progress: game name · task id · status (+ short reason on failures).
+Detail cards (`query gid` / `query label`) are user-facing: game name, task id, status, update time, whether result pack exists, whether group delivery happened; optional failure / delivery notes. No session/adb/hotfix.
+
+List headers look like `【我的进行中任务】（共 N 条）` / `【全部进行中任务】` / `【状态：success】`.
 
 ### 3.1 My active tasks (asker view)
 
@@ -110,6 +113,18 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 ```
 
 - Exact match on `task_id` only.
+- Reply shape (Shanghai times):
+
+```text
+【游戏名】
+任务号：t-0002
+状态：success
+更新：2026-08-06 11:18:07
+结果包：已生成
+群回传：2026-08-06 11:20:00
+```
+
+Optional lines: `原因：…` (task error), `回传说明：…` (delivery note). Miss: `未找到：…`.
 
 ### 3.5 By label
 
@@ -117,9 +132,7 @@ Text columns: `task_id`, `label`, `status`; failure lists may append a short `er
 @bot query label 三国
 ```
 
-- Fuzzy match on `label` (`LIKE %token%`), up to **10** rows.
-- Extra lines: `delivered` (Shanghai or `-`), `buf_done` (`yes`/`no`), `session`, `adb`, optional `deliver_err`.
-- Miss: `not found: …`.
+- Fuzzy match on `label` (`LIKE %token%`), up to **10** rows; same card layout as §3.4.
 
 ### 3.6 Result password
 

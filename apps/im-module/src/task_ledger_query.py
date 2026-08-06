@@ -18,7 +18,7 @@ from ops_commands import (
 )
 
 _DISPLAY_COLS = ("task_id", "label", "status", "error", "updated_at")
-_GID_COLS = (
+_DETAIL_COLS = (
     "task_id",
     "label",
     "status",
@@ -26,8 +26,6 @@ _GID_COLS = (
     "updated_at",
     "im_delivered_at",
     "im_deliver_error",
-    "session_id",
-    "adb_serial",
     "buf_done_zip",
 )
 _EXPORT_TABLE_COLS = (
@@ -43,6 +41,7 @@ _PROGRESS_ROW_CAP = 30
 _GID_ROW_CAP = 10
 _EXPORT_HARD_CAP = 50000
 _LABEL_MAX = 20
+_DETAIL_LABEL_MAX = 40
 _LIST_ERROR_MAX = 80
 _GID_ERROR_MAX = 200
 
@@ -124,36 +123,46 @@ def _like_pattern(raw: str) -> str:
     return f"%{escaped}%"
 
 
+def _format_row_line(row: sqlite3.Row, *, with_error: bool = False) -> str:
+    label = _clip(str(row["label"] or "未命名"), _LABEL_MAX)
+    task_id = str(row["task_id"] or "-")
+    status = str(row["status"] or "-")
+    line = f"{label} · {task_id} · {status}"
+    if with_error and _is_failure_terminal(status):
+        err = _clip(str(row["error"] or ""), _LIST_ERROR_MAX)
+        if err:
+            line = f"{line}\n  原因：{err}"
+    return line
+
+
 def _format_progress(rows: list[sqlite3.Row], total: int, *, header: str) -> str:
-    lines = [header]
-    for row in rows:
-        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
-        lines.append(f"{row['task_id']}  {label}  {row['status']}")
+    lines = [f"{header}（共 {total} 条）"]
+    if not rows:
+        lines.append("（暂无）")
+    else:
+        lines.extend(_format_row_line(row) for row in rows)
     body = "\n".join(lines)
     if total > len(rows):
         body += (
-            f"\n… showing {len(rows)}/{total}, "
-            "use query label <name> or export table"
+            f"\n… 仅显示前 {len(rows)}/{total} 条，"
+            "可用 query label <游戏名> 或 export table"
         )
     return _fit_budget(body)
 
 
 def _format_list(rows: list[sqlite3.Row], *, header: str, total: int) -> str:
-    lines = [header]
-    for row in rows:
-        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
-        line = f"{row['task_id']}  {label}  {row['status']}"
-        status = str(row["status"] or "")
-        if _is_failure_terminal(status):
-            err = _clip(str(row["error"] or ""), _LIST_ERROR_MAX)
-            if err:
-                line = f"{line}  {err}"
-        lines.append(line)
+    lines = [f"{header}（共 {total} 条）"]
+    if not rows:
+        lines.append("（暂无）")
+    else:
+        lines.extend(
+            _format_row_line(row, with_error=True) for row in rows
+        )
     body = "\n".join(lines)
     if total > len(rows):
         body += (
-            f"\n… showing {len(rows)}/{total}, "
-            "use query label <name> or export table"
+            f"\n… 仅显示前 {len(rows)}/{total} 条，"
+            "可用 query label <游戏名> 或 export table"
         )
     return _fit_budget(body)
 
@@ -165,48 +174,32 @@ def _row_has(row: sqlite3.Row, key: str) -> bool:
         return False
 
 
-def _format_gid(rows: list[sqlite3.Row]) -> str:
+def _format_task_detail(rows: list[sqlite3.Row]) -> str:
+    """User-facing task card; no developer fields (session/adb/hotfix)."""
     blocks: list[str] = []
     for row in rows:
-        label = _clip(str(row["label"] or "-"), _LABEL_MAX)
+        label = _clip(str(row["label"] or "未命名"), _DETAIL_LABEL_MAX)
+        task_id = str(row["task_id"] or "-")
+        status = str(row["status"] or "-")
         when = to_shanghai(str(row["updated_at"] or ""))
-        head = f"{row['task_id']}  {label}  {row['status']}  {when}"
         bin_path = Path(str(row["buf_done_zip"] or "").strip())
-        bin_flag = "yes" if bin_path.is_file() else "no"
-        session = str(row["session_id"] or "").strip() or "-"
-        adb = str(row["adb_serial"] or "").strip() or "-"
+        has_bin = bin_path.is_file()
+        delivered = to_shanghai(str(row["im_delivered_at"] or ""))
         lines = [
-            head,
-            f"delivered  {to_shanghai(str(row['im_delivered_at'] or ''))}",
-            f"buf_done   {bin_flag}",
-            f"session    {session}",
-            f"adb        {adb}",
+            f"【{label}】",
+            f"任务号：{task_id}",
+            f"状态：{status}",
+            f"更新：{when}",
+            f"结果包：{'已生成' if has_bin else '未生成'}",
+            f"群回传：{delivered if delivered != '-' else '未回传'}",
         ]
-        if _row_has(row, "hotfix_has_files"):
-            hf = str(row["hotfix_has_files"] or "").strip() or "-"
-            src = (
-                str(row["hotfix_pull_source"] or "").strip()
-                if _row_has(row, "hotfix_pull_source")
-                else ""
-            )
-            screen = (
-                str(row["screen_reached"] or "").strip()
-                if _row_has(row, "screen_reached")
-                else ""
-            )
-            detail = hf
-            if src:
-                detail = f"{detail}/{src}"
-            if screen:
-                detail = f"{detail} screen={screen}"
-            lines.append(f"hotfix     {detail}")
+        err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
+        if err:
+            lines.append(f"原因：{err}")
         if _row_has(row, "im_deliver_error"):
             derr = _clip(str(row["im_deliver_error"] or ""), _GID_ERROR_MAX)
             if derr:
-                lines.append(f"deliver_err {derr}")
-        err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
-        if err:
-            lines.append(err)
+                lines.append(f"回传说明：{derr}")
         blocks.append("\n".join(lines))
     return _fit_budget("\n\n".join(blocks))
 
@@ -215,7 +208,7 @@ def _fit_budget(text: str) -> str:
     if len(text) <= _CHAR_BUDGET:
         return text
     cut = text[: _CHAR_BUDGET - 20].rstrip()
-    return cut + "\n… truncated"
+    return cut + "\n… 内容过长已截断"
 
 
 def _write_export_table_xlsx(rows: list[sqlite3.Row]) -> Path:
@@ -338,7 +331,9 @@ def _run_detail_query(
     token: str,
     by_label: bool,
 ) -> LedgerQueryResult:
-    slim_cols = ", ".join(c for c in _GID_COLS if c != "im_deliver_error")
+    slim_cols = ", ".join(
+        c for c in _DETAIL_COLS if c != "im_deliver_error"
+    )
     try:
         if by_label:
             rows = _query_by_label(conn, cols=cols, table=table, label=token)
@@ -355,36 +350,33 @@ def _run_detail_query(
             )
     if not rows:
         return LedgerQueryResult(
-            ok=True, message=f"not found: {token}", row_count=0
+            ok=True, message=f"未找到：{token}", row_count=0
         )
-    msg = _format_gid(rows)
+    msg = _format_task_detail(rows)
     if by_label and len(rows) >= _GID_ROW_CAP:
-        msg += (
-            f"\n… capped at {_GID_ROW_CAP}, "
-            "refine query or use export table"
-        )
+        msg += f"\n\n… 最多显示 {_GID_ROW_CAP} 条，请换更具体的名称"
     return LedgerQueryResult(ok=True, message=msg, row_count=len(rows))
 
 
 def _allowed_status_hint(*, include_all: bool = False) -> str:
     allowed = ", ".join(sorted(LEDGER_STATUSES))
     if include_all:
-        return f"状态不合法。可用：all（全部），或 {allowed}"
-    return f"状态不合法。可用：{allowed}"
+        return f"状态不正确。可用：all（全部），或 {allowed}"
+    return f"状态不正确。可用：{allowed}"
 
 
 def _export_usage_message() -> str:
     return (
-        "用法：export table all | export table <status>\n"
+        "用法：export table all | export table <状态>\n"
         f"{_allowed_status_hint(include_all=True)}"
     )
 
 
 def _query_usage_message() -> str:
     return (
-        "用法：query mine | query progress | query status <status> | "
-        "query gid <task_id> | query label <游戏名> | query password\n"
-        "导出请用：export table all | export table <status>"
+        "用法：query mine | query progress | query status <状态> | "
+        "query gid <任务号> | query label <游戏名> | query password\n"
+        "导出请用：export table all | export table <状态>"
     )
 
 
@@ -405,7 +397,7 @@ def run_ledger_query(
         if not password:
             return LedgerQueryResult(
                 ok=False,
-                message="ZIP_PASSWORD missing in apps/auto-extract/.env",
+                message="解压密码未配置，请联系管理员。",
             )
         return LedgerQueryResult(
             ok=True,
@@ -414,11 +406,13 @@ def run_ledger_query(
 
     try:
         conn = _connect()
-    except FileNotFoundError as exc:
-        return LedgerQueryResult(ok=False, message=str(exc))
+    except FileNotFoundError:
+        return LedgerQueryResult(
+            ok=False, message="任务库暂不可用，请稍后再试。"
+        )
 
     display_cols = ", ".join(_DISPLAY_COLS)
-    gid_cols = ", ".join(_GID_COLS)
+    detail_cols = ", ".join(_DETAIL_COLS)
     table_cols = ", ".join(_EXPORT_TABLE_COLS)
     table = _tasks_table()
     try:
@@ -427,7 +421,7 @@ def run_ledger_query(
             if not asker:
                 return LedgerQueryResult(
                     ok=False,
-                    message="无法识别提问人，请用钉钉账号重新 @ 机器人后再 query mine",
+                    message="无法识别提问人，请重新 @ 机器人后再试 query mine",
                 )
             try:
                 total, rows = _select_active(
@@ -440,14 +434,14 @@ def run_ledger_query(
             except sqlite3.OperationalError:
                 return LedgerQueryResult(
                     ok=False,
-                    message="tasks 表缺少 im_sender_id，无法 query mine",
+                    message="暂时无法按提问人筛选，请改用 query progress",
                 )
             return LedgerQueryResult(
                 ok=True,
                 message=_format_progress(
                     rows,
                     total,
-                    header=f"mine: {total} active (sender={asker})",
+                    header="【我的进行中任务】",
                 ),
                 row_count=len(rows),
                 truncated=total > len(rows),
@@ -463,7 +457,7 @@ def run_ledger_query(
             return LedgerQueryResult(
                 ok=True,
                 message=_format_progress(
-                    rows, total, header=f"progress: {total} active"
+                    rows, total, header="【全部进行中任务】"
                 ),
                 row_count=len(rows),
                 truncated=total > len(rows),
@@ -490,7 +484,7 @@ def run_ledger_query(
                 ok=True,
                 message=_format_list(
                     rows,
-                    header=f"status={status}  {len(rows)} shown",
+                    header=f"【状态：{status}】",
                     total=int(total),
                 ),
                 row_count=len(rows),
@@ -502,11 +496,11 @@ def run_ledger_query(
             if not token:
                 return LedgerQueryResult(
                     ok=False,
-                    message="用法：query gid <task_id>",
+                    message="用法：query gid <任务号>",
                 )
             return _run_detail_query(
                 conn,
-                cols=gid_cols,
+                cols=detail_cols,
                 table=table,
                 token=token,
                 by_label=False,
@@ -521,7 +515,7 @@ def run_ledger_query(
                 )
             return _run_detail_query(
                 conn,
-                cols=gid_cols,
+                cols=detail_cols,
                 table=table,
                 token=token,
                 by_label=True,
@@ -564,13 +558,13 @@ def run_ledger_query(
             if truncated:
                 unique = unique[:_EXPORT_HARD_CAP]
             path = _write_export_table_xlsx(unique)
-            scope_label = "all" if scope == "all" else f"status={scope}"
+            scope_label = "全部" if scope == "all" else f"状态 {scope}"
             msg = (
-                f"export table {scope_label}: {len(unique)} unique filenames "
-                f"xlsx (Asia/Shanghai YYYY-mm-DD: HH:mm)"
+                f"已导出表格（{scope_label}）："
+                f"{len(unique)} 个文件（已按文件名去重）"
             )
             if truncated:
-                msg += f" truncated=true cap={_EXPORT_HARD_CAP}"
+                msg += f"\n已截断至上限 {_EXPORT_HARD_CAP} 条"
             return LedgerQueryResult(
                 ok=True,
                 message=msg,

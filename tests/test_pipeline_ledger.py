@@ -311,7 +311,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     prog = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_progress")
     )
-    assert prog.ok and "progress:" in prog.message and "t-0002" in prog.message
+    assert prog.ok and "全部进行中" in prog.message and "t-0002" in prog.message
     assert "t-0001" not in prog.message
     assert prog.file_path is None
 
@@ -319,10 +319,13 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         ops_commands.OpsCommand(kind="query_gid", arg="t-0001")
     )
     assert gid.ok and "2026-08-04 20:01:00" in gid.message
-    assert "delivered  2026-08-04 20:05:00" in gid.message
-    assert "buf_done   yes" in gid.message
-    assert "session    ses-1" in gid.message
-    assert "adb        emulator-5554" in gid.message
+    assert "任务号：t-0001" in gid.message
+    assert "群回传：2026-08-04 20:05:00" in gid.message
+    assert "结果包：已生成" in gid.message
+    assert "session" not in gid.message
+    assert "adb" not in gid.message
+    assert "emulator-5554" not in gid.message
+    assert "ses-1" not in gid.message
 
     exported = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_table", arg="all")
@@ -331,7 +334,8 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert exported.file_path.suffix == ".xlsx"
     # a.apk appears twice in DB; unique keeps latest (t-0001), plus b.apk → 2
     assert exported.row_count == 2
-    assert "export table all" in exported.message
+    assert "已导出表格" in exported.message
+    assert "全部" in exported.message
     from openpyxl import load_workbook
 
     wb = load_workbook(exported.file_path, read_only=True)
@@ -353,21 +357,21 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         ops_commands.OpsCommand(kind="export_table", arg="success")
     )
     assert success_only.ok and success_only.row_count == 1
-    assert "status=success" in success_only.message
+    assert "状态 success" in success_only.message
 
     bad_shape = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_usage")
     )
     assert not bad_shape.ok
     assert "export table all" in bad_shape.message
-    assert "状态不合法" in bad_shape.message
+    assert "状态不正确" in bad_shape.message
     assert "【提交任务】" not in bad_shape.message
 
     bad = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_table", arg="nope")
     )
     assert not bad.ok
-    assert "状态不合法" in bad.message
+    assert "状态不正确" in bad.message
     assert "all" in bad.message
     assert "success" in bad.message
     assert "【提交任务】" not in bad.message
@@ -375,4 +379,4 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     miss = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="query_gid", arg="nope")
     )
-    assert miss.ok and miss.row_count == 0 and "not found" in miss.message
+    assert miss.ok and miss.row_count == 0 and "未找到" in miss.message

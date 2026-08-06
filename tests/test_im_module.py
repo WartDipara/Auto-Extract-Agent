@@ -726,7 +726,7 @@ def test_pending_inbox_rewritten_when_missing_after_core_up(tmp_path, monkeypatc
     assert rewritten.is_file()
     data = json.loads(rewritten.read_text(encoding="utf-8"))
     assert data["get-texts"]["urls"] == ["https://cdn.example.com/a.apk"]
-    assert any("重新投递" in t for _, t in ch.texts)
+    assert any("继续处理" in t or "已恢复" in t for _, t in ch.texts)
     assert list_pending(state)[0]["resubmit_count"] == 1
 
 

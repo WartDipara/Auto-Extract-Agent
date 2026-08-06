@@ -91,7 +91,7 @@ def test_query_mine_filters_sender(tmp_path, monkeypatch):
     assert mine.ok
     assert "t-a" in mine.message
     assert "t-b" not in mine.message
-    assert "mine:" in mine.message
+    assert "我的进行中" in mine.message
 
     all_prog = run_ledger_query(OpsCommand(kind="query_progress"))
     assert all_prog.ok
@@ -183,7 +183,10 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
     assert "t-1" in result.message
     assert "t-2" in result.message
     assert "t-3" not in result.message
-    assert "deliver_err" in result.message
+    assert "回传说明：send fail" in result.message
+    assert "原因：boom" in result.message
+    assert "session" not in result.message
+    assert "adb" not in result.message
 
     by_label = run_ledger_query(OpsCommand(kind="query_label", arg="bar"))
     assert by_label.ok and by_label.row_count == 1

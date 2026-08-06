@@ -40,6 +40,24 @@ def _clip_err(text: str) -> str:
     return s[: _DELIVER_ERR_MAX - 1] + "…"
 
 
+def _user_label(done_or_label) -> str:
+    if isinstance(done_or_label, dict):
+        raw = done_or_label.get("label") or done_or_label.get("filename") or ""
+    else:
+        raw = done_or_label
+    name = " ".join(str(raw or "未命名").split()) or "未命名"
+    if len(name) > 40:
+        name = name[:39] + "…"
+    return name
+
+
+def _user_task_card(title: str, *, label: str, task_id: str, extra: list[str] | None = None) -> str:
+    lines = [f"【{label}】{title}", f"任务号：{task_id or '-'}"]
+    if extra:
+        lines.extend(extra)
+    return "\n".join(lines)
+
+
 def _non_retryable_deliver_error(exc: BaseException | str) -> bool:
     text = str(exc or "").lower()
     keys = (
@@ -248,12 +266,14 @@ class Courier:
         except NotImplementedError:
             self._channel.reply_text(
                 chat_id,
-                f"channel cannot send files; saved: {result.file_path}",
+                "表格已生成，但当前通道不支持发文件，请联系管理员取回。",
                 at_user_ids=at_user_ids,
             )
-        except Exception as exc:
+        except Exception:
             self._channel.reply_text(
-                chat_id, f"send file failed: {exc}", at_user_ids=at_user_ids
+                chat_id,
+                "表格已生成，但发送失败，请稍后重试 export table。",
+                at_user_ids=at_user_ids,
             )
 
     def _enqueue_urls(
@@ -310,8 +330,11 @@ class Courier:
         )
         return path
 
-    def _enqueue_ack_text(self, filename: str, url_count: int) -> str:
-        base = f"已登记：{filename}\n链接数={url_count}"
+    def _enqueue_ack_text(self, _filename: str, url_count: int) -> str:
+        base = (
+            f"已登记，共 {url_count} 条链接\n"
+            "处理完成后结果将发回本群。"
+        )
         if self._core_is_healthy(stale_sec=config.CORE_SUBMIT_STALE_SEC):
             return base
         # Same group already heard via this ack — suppress later poll broadcast.
@@ -383,7 +406,7 @@ class Courier:
             if _source_rejected(filename):
                 self._notify_pending_terminal(
                     item,
-                    f"入队未受理（请检查链接或格式）：{filename}",
+                    "入队未受理，请检查链接或格式后重新提交。",
                 )
                 remove_pending(state, filename)
                 continue
@@ -428,7 +451,7 @@ class Courier:
                 mark_exhausted(state, filename)
                 self._notify_pending_terminal(
                     item,
-                    f"入队自动重试已达上限，请重新提交：{filename}",
+                    "入队自动重试已达上限，请重新提交链接。",
                 )
                 continue
             route = str(item.get("route") or config.INBOX_ROUTE).strip()
@@ -462,7 +485,7 @@ class Courier:
                     at_ids = [sender_id] if sender_id else None
                     self._channel.reply_text(
                         chat_id,
-                        f"处理服务已恢复，已重新投递：{filename}",
+                        "处理服务已恢复，已登记任务将继续处理。",
                         at_user_ids=at_ids,
                     )
                 except Exception:
@@ -524,7 +547,7 @@ class Courier:
     ) -> bool:
         task_id = str(done.get("task_id") or "")
         table = str(done.get("_tasks_table") or config.TASKS_TABLE)
-        label = str(done.get("label") or done.get("filename") or task_id)
+        label = _user_label(done)
         sender = str(done.get("im_sender_id") or "").strip()
         at_ids = [sender] if sender else None
         err = f"abandoned:{reason}"
@@ -532,7 +555,12 @@ class Courier:
             try:
                 self._channel.reply_text(
                     chat_id,
-                    f"结果回传已放弃：{label} task_id={task_id}\n{reason}",
+                    _user_task_card(
+                        "结果未能回传",
+                        label=label,
+                        task_id=task_id,
+                        extra=["说明：请稍后重新提交，或联系管理员排查。"],
+                    ),
                     at_user_ids=at_ids,
                 )
             except Exception:
@@ -616,7 +644,7 @@ class Courier:
         st = str(done.get("status") or "")
         task_id = str(done.get("task_id") or "")
         table = str(done.get("_tasks_table") or config.TASKS_TABLE)
-        label = str(done.get("label") or done.get("filename") or task_id)
+        label = _user_label(done)
         sender = str(done.get("im_sender_id") or "").strip()
         at_ids = [sender] if sender else None
         max_attempts = self._max_deliver_attempts()
@@ -628,8 +656,15 @@ class Courier:
                 try:
                     self._channel.reply_text(
                         chat_id,
-                        f"结果已发送：{zip_path.name or '-'} ({label}) "
-                        f"task_id={task_id}",
+                        _user_task_card(
+                            "处理完成，结果已发到本群",
+                            label=label,
+                            task_id=task_id,
+                            extra=[
+                                f"文件：{zip_path.name or '-'}",
+                                "解压密码可用 query password 查询。",
+                            ],
+                        ),
                         at_user_ids=at_ids,
                     )
                     text_err = ""
@@ -665,9 +700,11 @@ class Courier:
                     try:
                         self._channel.reply_text(
                             chat_id,
-                            f"任务已成功，结果文件超时未就绪，停止回传："
-                            f"{label} ({zip_path.name or '-'}) "
-                            f"task_id={task_id}",
+                            _user_task_card(
+                                "处理已完成，但结果包未能生成，已停止回传",
+                                label=label,
+                                task_id=task_id,
+                            ),
                             at_user_ids=at_ids,
                         )
                     except Exception as exc:
@@ -714,7 +751,11 @@ class Courier:
                     try:
                         self._channel.reply_text(
                             chat_id,
-                            f"发送结果失败：{label} task_id={task_id}\n{exc}",
+                            _user_task_card(
+                                "结果发送失败，将自动重试",
+                                label=label,
+                                task_id=task_id,
+                            ),
                             at_user_ids=at_ids,
                         )
                     except Exception:
@@ -742,7 +783,15 @@ class Courier:
             try:
                 self._channel.reply_text(
                     chat_id,
-                    f"结果已发送：{zip_path.name} ({label}) task_id={task_id}",
+                    _user_task_card(
+                        "处理完成，结果已发到本群",
+                        label=label,
+                        task_id=task_id,
+                        extra=[
+                            f"文件：{zip_path.name}",
+                            "解压密码可用 query password 查询。",
+                        ],
+                    ),
                     at_user_ids=at_ids,
                 )
             except Exception as exc:
@@ -784,7 +833,15 @@ class Courier:
         try:
             self._channel.reply_text(
                 chat_id,
-                f"任务结束：{label}\n{st}\n{err}\ntask_id={task_id}",
+                _user_task_card(
+                    "未能完成",
+                    label=label,
+                    task_id=task_id,
+                    extra=[
+                        f"状态：{st}",
+                        f"原因：{_clip_err(str(err))}",
+                    ],
+                ),
                 at_user_ids=at_ids,
             )
         except Exception as exc:
