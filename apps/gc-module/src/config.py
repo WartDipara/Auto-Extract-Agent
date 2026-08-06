@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_APP_ROOT = Path(__file__).resolve().parent.parent
-_REPO_ROOT = _APP_ROOT.parent.parent
-_AUTO = _REPO_ROOT / "apps" / "auto-extract"
+from shared.module_registry import SHARED_TASKS_DB, all_modules, primary_module
 
-WORKSPACE_ROOT = (_AUTO / "workspace").resolve()
-DOWNLOADS_DIR = (_AUTO / "downloads").resolve()
-RESULT_DIR = (_AUTO / "result").resolve()
-BUF_DONE_DIR = (_AUTO / "buf_done").resolve()
-TASKS_DB = (_AUTO / "state" / "tasks.db").resolve()
+_APP_ROOT = Path(__file__).resolve().parent.parent
+
+MODULES = list(all_modules())
+_PRIMARY = primary_module()
+
+WORKSPACE_ROOT = _PRIMARY.workspace_root
+DOWNLOADS_DIR = _PRIMARY.downloads_dir
+RESULT_DIR = _PRIMARY.result_dir
+BUF_DONE_DIR = _PRIMARY.buf_done_dir
+TASKS_DB = SHARED_TASKS_DB
+TASKS_TABLE = _PRIMARY.tasks_table
 
 STATE_DIR = (_APP_ROOT / "state").resolve()
 LOCK_PATH = STATE_DIR / "gc.lock"
@@ -22,24 +26,5 @@ RETENTION_SEC = RETENTION_DAYS * 86400.0
 INTERVAL_SEC = 3600.0
 DRY_RUN_ENV = False
 
-TERMINAL_STATUSES = frozenset(
-    {
-        "success",
-        "decrypt_failed",
-        "assets_missing",
-        "abnormal_exit",
-        "failed",
-        "timeout",
-    }
-)
-ACTIVE_STATUSES = frozenset(
-    {
-        "queued",
-        "downloaded",
-        "patched",
-        "on_device",
-        "device_done",
-        "on_extract",
-        "extract_done",
-    }
-)
+TERMINAL_STATUSES = _PRIMARY.terminal_statuses
+ACTIVE_STATUSES = _PRIMARY.active_statuses

@@ -1,6 +1,6 @@
-from prep.device_handlers.mumu import MuMuHandler
-from prep.device_handlers.xiaomi import XiaomiHandler
-from prep.device_router import register
+from .mumu import MuMuHandler
+from .xiaomi import XiaomiHandler
+from ..device_router import register
 
 _registered = False
 

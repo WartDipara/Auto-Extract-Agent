@@ -1,34 +1,11 @@
 from dataclasses import dataclass, field
 
+from shared.module_registry import GET_TEXTS_MODULE_ID, get_module
 
-STATUSES = (
-    "queued",
-    "downloaded",
-    "patched",
-    "on_device",
-    "device_done",
-    "on_extract",
-    "extract_done",
-    "success",
-    "decrypt_failed",
-    "assets_missing",
-    "abnormal_exit",
-    "failed",
-    "timeout",
-)
+_MODULE = get_module(GET_TEXTS_MODULE_ID)
 
-TERMINAL_STATUSES = frozenset(
-    {
-        "success",
-        "decrypt_failed",
-        "assets_missing",
-        "abnormal_exit",
-        "failed",
-        "timeout",
-    }
-)
-
-ACTIVE_STATUSES = frozenset(s for s in STATUSES if s not in TERMINAL_STATUSES)
+TERMINAL_STATUSES = _MODULE.terminal_statuses
+ACTIVE_STATUSES = _MODULE.active_statuses
 
 
 @dataclass
@@ -50,6 +27,7 @@ class Task:
     finished_at: str = ""
     im_delivered_at: str = ""
     im_chat_id: str = ""
+    im_sender_id: str = ""
 
 
 @dataclass

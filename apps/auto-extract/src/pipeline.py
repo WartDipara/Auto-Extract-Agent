@@ -25,8 +25,7 @@ from extract_bridge import (
 )
 from models import Task
 from opencode_session import OpenCodeSessionManager
-from prep import run_device_stage, run_patch_stage
-from prep.debuggable_apk import package_name_from_apk
+from prep_stages import run_device_stage, run_patch_stage
 from resource_pools import AdbPool, OpenCodePool
 from shared.archive_contract import (
     clean_result_csv,
@@ -35,6 +34,7 @@ from shared.archive_contract import (
     utc_now,
     write_meta,
 )
+from shared.prep.debuggable_apk import package_name_from_apk
 
 _log = logging.getLogger(__name__)
 

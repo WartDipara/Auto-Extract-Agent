@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import config
-from prep.device_router import dispatch
+from .device_router import dispatch
 
 if TYPE_CHECKING:
-    from prep.device_router import DeviceHandler
+    from .device_router import DeviceHandler
 
 _log = logging.getLogger(__name__)
 

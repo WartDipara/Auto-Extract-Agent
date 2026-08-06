@@ -6,26 +6,33 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from shared.module_registry import GET_TEXTS_MODULE_ID, SHARED_TASKS_DB, get_module
+
 APP_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = APP_ROOT.parent.parent
 PROJECT_ROOT = APP_ROOT
 
 load_dotenv(APP_ROOT / ".env")
 
-WORKSPACE_ROOT = APP_ROOT / "workspace"
+MODULE_ID = GET_TEXTS_MODULE_ID
+MODULE = get_module(MODULE_ID)
+TASKS_TABLE = MODULE.tasks_table
+META_SEQ_KEY = MODULE.meta_seq_key
 
-INBOX_DIR = APP_ROOT / "inbox"
-DOWNLOADS_DIR = APP_ROOT / "downloads"
-RESULT_DIR = APP_ROOT / "result"
-BUF_DONE_DIR = APP_ROOT / "buf_done"
+WORKSPACE_ROOT = MODULE.workspace_root
+
+INBOX_DIR = MODULE.inbox_dir
+DOWNLOADS_DIR = MODULE.downloads_dir
+RESULT_DIR = MODULE.result_dir
+BUF_DONE_DIR = MODULE.buf_done_dir
 LOGS_DIR = APP_ROOT / "logs"
-STATE_DIR = APP_ROOT / "state"
+STATE_DIR = MODULE.state_dir
 PROCESSED_DIR = STATE_DIR / "processed"
 SESSIONS_FILE = STATE_DIR / "sessions.jsonl"
 OPENCODE_SESSIONS_FILE = STATE_DIR / "opencode_sessions.jsonl"
 QUEUE_STATUS_FILE = STATE_DIR / "queue_status.json"
-HEARTBEAT_FILE = STATE_DIR / "heartbeat"
-TASKS_DB = STATE_DIR / "tasks.db"
+HEARTBEAT_FILE = MODULE.heartbeat_path
+TASKS_DB = SHARED_TASKS_DB
 SERVICE_LOG = STATE_DIR / "service.log"
 
 QUEUE_RECENT_DONE_MAX = 50

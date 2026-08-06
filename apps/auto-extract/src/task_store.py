@@ -8,13 +8,21 @@ from pathlib import Path
 from typing import Any
 
 import config
-from models import TERMINAL_STATUSES, Task
+from models import ACTIVE_STATUSES, TERMINAL_STATUSES, Task
 from shared.archive_contract import utc_now
 
 _log = logging.getLogger(__name__)
 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
+
+
+def _table() -> str:
+    return config.TASKS_TABLE
+
+
+def _seq_key() -> str:
+    return config.META_SEQ_KEY
 
 
 def _db_path() -> Path:
@@ -46,15 +54,16 @@ def open_store() -> None:
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
+        table = _table()
         conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS tasks (
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
                 task_id TEXT PRIMARY KEY,
                 url TEXT NOT NULL,
                 source_file TEXT NOT NULL DEFAULT '',
                 filename TEXT NOT NULL DEFAULT '',
                 label TEXT NOT NULL DEFAULT '',
-                labels_json TEXT NOT NULL DEFAULT '{}',
+                labels_json TEXT NOT NULL DEFAULT '{{}}',
                 status TEXT NOT NULL,
                 error TEXT NOT NULL DEFAULT '',
                 result_csv TEXT NOT NULL DEFAULT '',
@@ -65,14 +74,15 @@ def open_store() -> None:
                 updated_at TEXT NOT NULL,
                 finished_at TEXT NOT NULL DEFAULT '',
                 im_delivered_at TEXT NOT NULL DEFAULT '',
-                im_chat_id TEXT NOT NULL DEFAULT ''
+                im_chat_id TEXT NOT NULL DEFAULT '',
+                im_sender_id TEXT NOT NULL DEFAULT ''
             );
-            CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at);
-            CREATE INDEX IF NOT EXISTS idx_tasks_url ON tasks(url);
-            CREATE INDEX IF NOT EXISTS idx_tasks_source_status ON tasks(source_file, status);
-            CREATE INDEX IF NOT EXISTS idx_tasks_undelivered
-                ON tasks(im_delivered_at, status);
+            CREATE INDEX IF NOT EXISTS idx_{table}_status ON {table}(status);
+            CREATE INDEX IF NOT EXISTS idx_{table}_updated ON {table}(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_{table}_url ON {table}(url);
+            CREATE INDEX IF NOT EXISTS idx_{table}_source_status ON {table}(source_file, status);
+            CREATE INDEX IF NOT EXISTS idx_{table}_undelivered
+                ON {table}(im_delivered_at, status);
             CREATE TABLE IF NOT EXISTS meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -82,14 +92,21 @@ def open_store() -> None:
         _ensure_columns(conn)
         conn.commit()
         _conn = conn
-        _log.info("task_store open %s", path)
+        _log.info("task_store open %s table=%s", path, table)
 
 
 def _ensure_columns(conn: sqlite3.Connection) -> None:
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+    table = _table()
+    cols = {
+        row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
     if "im_chat_id" not in cols:
         conn.execute(
-            "ALTER TABLE tasks ADD COLUMN im_chat_id TEXT NOT NULL DEFAULT ''"
+            f"ALTER TABLE {table} ADD COLUMN im_chat_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "im_sender_id" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN im_sender_id TEXT NOT NULL DEFAULT ''"
         )
 
 
@@ -127,6 +144,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         finished_at=row["finished_at"] or "",
         im_delivered_at=row["im_delivered_at"] or "",
         im_chat_id=_row_get(row, "im_chat_id"),
+        im_sender_id=_row_get(row, "im_sender_id"),
     )
 
 
@@ -138,14 +156,15 @@ def _row_get(row: sqlite3.Row, key: str) -> str:
 
 
 def get_next_seq() -> int:
+    key = _seq_key()
     with _lock:
         conn = _require_conn()
         row = conn.execute(
-            "SELECT value FROM meta WHERE key='next_seq'"
+            "SELECT value FROM meta WHERE key=?", (key,)
         ).fetchone()
         if row is None:
             conn.execute(
-                "INSERT INTO meta(key, value) VALUES('next_seq', '1')"
+                "INSERT INTO meta(key, value) VALUES(?, '1')", (key,)
             )
             conn.commit()
             return 1
@@ -153,12 +172,13 @@ def get_next_seq() -> int:
 
 
 def set_next_seq(seq: int) -> None:
+    key = _seq_key()
     with _lock:
         conn = _require_conn()
         conn.execute(
-            "INSERT INTO meta(key, value) VALUES('next_seq', ?) "
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (str(seq),),
+            (key, str(seq)),
         )
         conn.commit()
 
@@ -167,17 +187,19 @@ def insert_task(task: Task) -> Task:
     now = utc_now()
     task.created_at = task.created_at or now
     task.updated_at = now
+    table = _table()
     with _lock:
         conn = _require_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute(
-                """
-                INSERT INTO tasks (
+                f"""
+                INSERT INTO {table} (
                     task_id, url, source_file, filename, label, labels_json,
                     status, error, result_csv, session_id, buf_done_zip, adb_serial,
-                    created_at, updated_at, finished_at, im_delivered_at, im_chat_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, finished_at, im_delivered_at, im_chat_id,
+                    im_sender_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -197,6 +219,7 @@ def insert_task(task: Task) -> Task:
                     task.finished_at or "",
                     task.im_delivered_at or "",
                     task.im_chat_id or "",
+                    task.im_sender_id or "",
                 ),
             )
             conn.commit()
@@ -222,17 +245,19 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
         "finished_at",
         "im_delivered_at",
         "im_chat_id",
+        "im_sender_id",
     }
     patch = {k: v for k, v in fields.items() if k in allowed}
     if not patch:
         return get_task(task_id)
 
+    table = _table()
     with _lock:
         conn = _require_conn()
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+                f"SELECT * FROM {table} WHERE task_id=?", (task_id,)
             ).fetchone()
             if row is None:
                 conn.rollback()
@@ -248,12 +273,12 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
             if task.status in TERMINAL_STATUSES and not task.finished_at:
                 task.finished_at = now
             conn.execute(
-                """
-                UPDATE tasks SET
+                f"""
+                UPDATE {table} SET
                     url=?, source_file=?, filename=?, label=?, labels_json=?,
                     status=?, error=?, result_csv=?, session_id=?, buf_done_zip=?,
                     adb_serial=?, updated_at=?, finished_at=?, im_delivered_at=?,
-                    im_chat_id=?
+                    im_chat_id=?, im_sender_id=?
                 WHERE task_id=?
                 """,
                 (
@@ -272,6 +297,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     task.finished_at or "",
                     task.im_delivered_at or "",
                     task.im_chat_id or "",
+                    task.im_sender_id or "",
                     task.task_id,
                 ),
             )
@@ -283,10 +309,11 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
 
 
 def get_task(task_id: str) -> Task | None:
+    table = _table()
     with _lock:
         conn = _require_conn()
         row = conn.execute(
-            "SELECT * FROM tasks WHERE task_id=?", (task_id,)
+            f"SELECT * FROM {table} WHERE task_id=?", (task_id,)
         ).fetchone()
         return _row_to_task(row) if row else None
 
@@ -295,10 +322,11 @@ def list_by_status(*statuses: str) -> list[Task]:
     if not statuses:
         return []
     placeholders = ",".join("?" * len(statuses))
+    table = _table()
     with _lock:
         conn = _require_conn()
         rows = conn.execute(
-            f"SELECT * FROM tasks WHERE status IN ({placeholders}) "
+            f"SELECT * FROM {table} WHERE status IN ({placeholders}) "
             "ORDER BY updated_at ASC",
             statuses,
         ).fetchall()
@@ -306,23 +334,16 @@ def list_by_status(*statuses: str) -> list[Task]:
 
 
 def list_active() -> list[Task]:
-    return list_by_status(
-        "queued",
-        "downloaded",
-        "patched",
-        "on_device",
-        "device_done",
-        "on_extract",
-        "extract_done",
-    )
+    return list_by_status(*ACTIVE_STATUSES)
 
 
 def list_recent_done(limit: int = 50) -> list[Task]:
+    table = _table()
     with _lock:
         conn = _require_conn()
         rows = conn.execute(
             f"""
-            SELECT * FROM tasks
+            SELECT * FROM {table}
             WHERE status IN ({",".join("?" * len(TERMINAL_STATUSES))})
             ORDER BY finished_at DESC, updated_at DESC
             LIMIT ?

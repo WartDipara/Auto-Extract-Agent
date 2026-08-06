@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from time import monotonic
 from typing import Callable
@@ -17,7 +18,7 @@ from lark_oapi.api.im.v1 import (
     EventSender,
 )
 
-from channels.base import MessageHandler
+from channels.base import IncomingChat, MessageHandler
 
 _log = logging.getLogger(__name__)
 
@@ -123,12 +124,33 @@ class FeishuChannel:
             chat_id, text = _parse_receive(data)
             if not chat_id or text is None:
                 return
+            sender_id = ""
+            try:
+                sender_id = str(
+                    getattr(getattr(event.sender, "sender_id", None), "user_id", "")
+                    or ""
+                ).strip()
+            except Exception:
+                sender_id = ""
             if self._on_message:
-                self._on_message(chat_id, text)
+                self._on_message(
+                    IncomingChat(
+                        chat_id=chat_id,
+                        text=text,
+                        sender_id=sender_id,
+                    )
+                )
         except Exception:
             _log.exception("feishu message handler failed")
 
-    def reply_text(self, chat_id: str, text: str) -> None:
+    def reply_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        at_user_ids: Sequence[str] | None = None,
+    ) -> None:
+        _ = at_user_ids
         body = CreateMessageRequestBody.builder().receive_id(chat_id).msg_type(
             "text"
         ).content(json.dumps({"text": text}, ensure_ascii=False)).build()

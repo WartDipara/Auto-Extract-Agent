@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import requests
 
@@ -12,12 +13,9 @@ _log = logging.getLogger(__name__)
 
 _OPENAPI = "https://api.dingtalk.com"
 _OAPI = "https://oapi.dingtalk.com"
-# Enterprise robot message templates (official msgKey).
 MSG_KEY_TEXT = "sampleText"
 MSG_KEY_FILE = "sampleFile"
-# media/upload type=file limit (DingTalk docs).
 _MEDIA_FILE_MAX_BYTES = 20 * 1024 * 1024
-# sampleFile fileType values DingTalk documents.
 _FILE_TYPE_BY_SUFFIX = {
     ".xlsx": "xlsx",
     ".xls": "xlsx",
@@ -26,9 +24,20 @@ _FILE_TYPE_BY_SUFFIX = {
     ".rar": "rar",
     ".doc": "doc",
     ".docx": "docx",
-    # Result packs are AES zip saved as .bin — send as zip.
     ".bin": "zip",
 }
+
+
+@dataclass(frozen=True)
+class SessionReplyTarget:
+    webhook: str
+    expire_at_ms: int
+    sender_staff_id: str = ""
+    sender_nick: str = ""
+
+    def alive(self, *, now_ms: int | None = None) -> bool:
+        current = int(time.time() * 1000) if now_ms is None else now_ms
+        return bool(self.webhook) and current < self.expire_at_ms - 5_000
 
 
 class DingTalkOpenApi:
@@ -60,6 +69,46 @@ class DingTalkOpenApi:
         self._token = token
         self._token_expire_at = now + expire_in
         return token
+
+    def reply_session_text(
+        self,
+        target: SessionReplyTarget,
+        text: str,
+        *,
+        at_user_ids: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Reply via sessionWebhook (official stream SDK pattern; supports @)."""
+        if not target.alive():
+            raise RuntimeError("dingtalk sessionWebhook expired")
+        user_ids = [u for u in (at_user_ids or ()) if (u or "").strip()]
+        if not user_ids and target.sender_staff_id:
+            user_ids = [target.sender_staff_id]
+        body: dict[str, Any] = {
+            "msgtype": "text",
+            "text": {"content": text},
+        }
+        if user_ids:
+            body["at"] = {"atUserIds": user_ids, "isAtAll": False}
+        resp = requests.post(
+            target.webhook,
+            headers={"Content-Type": "application/json", "Accept": "*/*"},
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            _log.error(
+                "dingtalk sessionWebhook failed status=%s body=%s",
+                resp.status_code,
+                resp.text[:500],
+            )
+            resp.raise_for_status()
+        data = resp.json() if resp.text else {}
+        _log.info(
+            "dingtalk sessionWebhook ok at=%s keys=%s",
+            user_ids or "-",
+            list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+        )
+        return data if isinstance(data, dict) else {"raw": data}
 
     def send_group_text(self, open_conversation_id: str, text: str) -> dict[str, Any]:
         return self._post_robot(
@@ -205,7 +254,6 @@ class DingTalkOpenApi:
 
 
 def resolve_send_file_meta(path: Path) -> tuple[str, str]:
-    """Return (dingtalk_file_name, fileType) for sampleFile / media upload."""
     path = Path(path)
     suffix = path.suffix.lower()
     file_type = _FILE_TYPE_BY_SUFFIX.get(suffix)

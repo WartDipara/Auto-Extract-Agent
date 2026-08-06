@@ -17,13 +17,15 @@ Do not rely on an interactive PowerShell window.
 
 ## Health
 
-- Core writes `apps/auto-extract/state/heartbeat` every ~5s.
-- IM treats heartbeat older than **15s** as core down (submit probe uses **10s**).
-- Per-module `state/service.log` rotates at 5MB × 3.
+- Each core module writes its own `state/heartbeat` (get-texts: `apps/auto-extract/state/heartbeat`, ~5s).
+- IM treats a module heartbeat older than **15s** as down (submit probe uses **10s**). With multiple cores registered, all must be healthy.
+- Per-process `state/service.log` rotates at 5MB × 3.
 
 ## Task truth
 
-- Ledger: `apps/auto-extract/state/tasks.db`
+- Shared ledger file: `apps/auto-extract/state/tasks.db` (one file; **one table per product module**).
+- get-texts table: `tasks` (today the only registered module).
+- Module paths / table names: `shared/module_registry.py`.
 - Chat: `@Lino query progress` / `query status …` / `query gid <id>`
 - `query gid` shows delivered time, whether `.bin` exists, session, adb.
 - Secrets / channel keys: `apps/auto-extract/.env`, `apps/im-module/.env` only.

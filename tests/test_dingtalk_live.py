@@ -142,8 +142,13 @@ def test_dingtalk_receive_and_delayed_reply():
     errors: list[BaseException] = []
     received: dict[str, str] = {}
 
-    def on_message(chat_id: str, text: str) -> None:
-        print(f"[stream] chat_id={chat_id} text={text!r}", flush=True)
+    def on_message(incoming) -> None:
+        chat_id = incoming.chat_id
+        text = incoming.text
+        print(
+            f"[stream] chat_id={chat_id} text={text!r} sender={incoming.sender_id}",
+            flush=True,
+        )
         if TRIGGER not in text:
             print(
                 f"[stream] ignore (need substring {TRIGGER!r})",
@@ -154,6 +159,7 @@ def test_dingtalk_receive_and_delayed_reply():
             return
         received["chat_id"] = chat_id
         received["text"] = text
+        received["sender_id"] = incoming.sender_id
 
         def _delayed_reply() -> None:
             try:
@@ -162,7 +168,8 @@ def test_dingtalk_receive_and_delayed_reply():
                     flush=True,
                 )
                 time.sleep(DELAY_REPLY_SEC)
-                channel.reply_text(chat_id, REPLY_OK)
+                at_ids = [incoming.sender_id] if incoming.sender_id else None
+                channel.reply_text(chat_id, REPLY_OK, at_user_ids=at_ids)
                 print(
                     f"[reply] sent ok; export DINGTALK_TEST_CHAT_ID={chat_id}",
                     flush=True,

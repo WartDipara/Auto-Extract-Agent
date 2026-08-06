@@ -62,6 +62,10 @@ class LedgerQueryResult:
     truncated: bool = False
 
 
+def _tasks_table() -> str:
+    return config.TASKS_TABLE
+
+
 def _connect() -> sqlite3.Connection:
     db = Path(config.TASKS_DB)
     if not db.is_file():
@@ -204,17 +208,18 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
     display_cols = ", ".join(_DISPLAY_COLS)
     gid_cols = ", ".join(_GID_COLS)
     export_cols = ", ".join(_EXPORT_COLS)
+    table = _tasks_table()
     try:
         if cmd.kind == "query_progress":
             placeholders = ", ".join("?" for _ in ACTIVE_STATUSES)
             statuses = tuple(sorted(ACTIVE_STATUSES))
             total = conn.execute(
-                f"SELECT COUNT(*) FROM tasks WHERE status IN ({placeholders})",
+                f"SELECT COUNT(*) FROM {table} WHERE status IN ({placeholders})",
                 statuses,
             ).fetchone()[0]
             rows = list(
                 conn.execute(
-                    f"SELECT {display_cols} FROM tasks "
+                    f"SELECT {display_cols} FROM {table} "
                     f"WHERE status IN ({placeholders}) "
                     "ORDER BY updated_at DESC LIMIT ?",
                     (*statuses, _PROGRESS_ROW_CAP),
@@ -239,11 +244,11 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                     ),
                 )
             total = conn.execute(
-                "SELECT COUNT(*) FROM tasks WHERE status=?", (status,)
+                f"SELECT COUNT(*) FROM {table} WHERE status=?", (status,)
             ).fetchone()[0]
             rows = list(
                 conn.execute(
-                    f"SELECT {display_cols} FROM tasks WHERE status=? "
+                    f"SELECT {display_cols} FROM {table} WHERE status=? "
                     "ORDER BY updated_at DESC LIMIT ?",
                     (status, _LIST_ROW_CAP),
                 ).fetchall()
@@ -268,7 +273,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
                 )
             rows = list(
                 conn.execute(
-                    f"SELECT {gid_cols} FROM tasks "
+                    f"SELECT {gid_cols} FROM {table} "
                     "WHERE task_id=? OR filename=? OR url=? "
                     "ORDER BY updated_at DESC LIMIT 5",
                     (gid, gid, gid),
@@ -285,7 +290,7 @@ def run_ledger_query(cmd: OpsCommand) -> LedgerQueryResult:
         if cmd.kind == "query_export":
             rows = list(
                 conn.execute(
-                    f"SELECT {export_cols} FROM tasks "
+                    f"SELECT {export_cols} FROM {table} "
                     "ORDER BY updated_at DESC LIMIT ?",
                     (_EXPORT_HARD_CAP + 1,),
                 ).fetchall()

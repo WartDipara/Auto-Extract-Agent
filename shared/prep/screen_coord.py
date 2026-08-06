@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from prep.adb_device import AdbDevice
+from .adb_device import AdbDevice
 
 _log = logging.getLogger(__name__)
 

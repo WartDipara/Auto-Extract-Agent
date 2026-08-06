@@ -8,10 +8,10 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import config
-from prep.adb_device import AdbDevice
-from prep.foreground_watch import ForegroundWatch
-from prep.ocr_util import ocr_image, texts_joined
-from prep.screen_coord import resolve_screen_coord_space
+from .adb_device import AdbDevice
+from .foreground_watch import ForegroundWatch
+from .ocr_util import ocr_image, texts_joined
+from .screen_coord import resolve_screen_coord_space
 from small_agent import UiAgentSession, ping_model
 from small_agent.tools import FrameOutcome
 
@@ -75,7 +75,7 @@ def wait_until_entry_screen(
             if action == "brought_back":
                 note = "just brought back from external/background UI"
 
-            # Prior decide still thinking â†’ skip this tick, never start another.
+            # Prior decide still thinking â†?skip this tick, never start another.
             if decide_future is not None and not decide_future.done():
                 if n == 1 or n % 5 == 0:
                     print(f"ocr gate skip: decide still running poll={n}", flush=True)

@@ -48,7 +48,7 @@ class FakeAdb:
 
 
 def test_foreground_watch_apply():
-    from prep.foreground_watch import ForegroundState, ForegroundWatch
+    from shared.prep.foreground_watch import ForegroundState, ForegroundWatch
 
     adb = FakeAdb()
     watch = ForegroundWatch(adb, "com.demo.game", poll_sec=0.1)

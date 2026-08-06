@@ -13,7 +13,7 @@ from pathlib import Path
 
 import config
 from androguard.core.apk import APK
-from prep.workspace import rmtree_force
+from .workspace import rmtree_force
 
 _log = logging.getLogger(__name__)
 

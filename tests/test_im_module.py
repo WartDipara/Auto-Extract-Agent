@@ -105,7 +105,7 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
         def stop(self):
             pass
 
-        def reply_text(self, chat_id, text):
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
             self.texts.append((chat_id, text))
 
         def send_file(self, chat_id, path):
@@ -250,7 +250,7 @@ def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
         def stop(self):
             pass
 
-        def reply_text(self, chat_id, text):
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
             pass
 
         def send_file(self, chat_id, path):
@@ -259,9 +259,15 @@ def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
     inbox = tmp_path / "inbox"
     monkeypatch.setattr(config, "INBOX_DIR", inbox)
     c = courier_mod.Courier(_FakeChannel())
-    path = c._enqueue_urls("group:cid-z", ["https://a.apk", "https://b.apk"], ack=False)
+    path = c._enqueue_urls(
+        "group:cid-z",
+        ["https://a.apk", "https://b.apk"],
+        sender_id="staff-z",
+        ack=False,
+    )
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["get-texts"]["im_chat_id"] == "group:cid-z"
+    assert data["get-texts"]["im_sender_id"] == "staff-z"
     assert data["get-texts"]["urls"] == ["https://a.apk", "https://b.apk"]
 
 
@@ -286,7 +292,7 @@ def test_enqueue_ack_mentions_core_down_once(tmp_path, monkeypatch):
         def stop(self):
             pass
 
-        def reply_text(self, chat_id, text):
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
             self.texts.append((chat_id, text))
 
         def send_file(self, chat_id, path):
@@ -435,7 +441,7 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
         def stop(self):
             pass
 
-        def reply_text(self, chat_id, text):
+        def reply_text(self, chat_id, text, *, at_user_ids=None):
             self.texts.append((chat_id, text))
 
         def send_file(self, chat_id, path):
@@ -483,7 +489,11 @@ def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
     assert ch.texts == []
 
     # Learn from first inbound → online, then core-down (still after intro).
-    c.on_message("group:cid-learned", "help")
+    from channels.base import IncomingChat
+
+    c.on_message(
+        IncomingChat(chat_id="group:cid-learned", text="help", sender_id="u1")
+    )
     assert any("用法" in t for _, t in ch.texts)
     down_idxs = [
         i

@@ -6,6 +6,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from shared.module_registry import (
+    SHARED_TASKS_DB,
+    all_modules,
+    primary_module,
+)
+
 _APP_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _APP_ROOT.parent.parent
 _AUTO = _REPO_ROOT / "apps" / "auto-extract"
@@ -28,8 +34,13 @@ DINGTALK_CLIENT_SECRET = (
 )
 DINGTALK_ROBOT_CODE = (os.environ.get("DINGTALK_ROBOT_CODE") or "").strip()
 
-INBOX_DIR = (_AUTO / "inbox").resolve()
-TASKS_DB = (_AUTO / "state" / "tasks.db").resolve()
+MODULES = list(all_modules())
+_PRIMARY = primary_module()
+
+INBOX_DIR = _PRIMARY.inbox_dir
+TASKS_DB = SHARED_TASKS_DB
+TASKS_TABLE = _PRIMARY.tasks_table
+INBOX_ROUTE = _PRIMARY.inbox_route
 QUERY_EXPORT_DIR = (_APP_ROOT / "state" / "query_exports").resolve()
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
@@ -41,9 +52,12 @@ if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
 ANNOUNCE_CHAT_ID = _announce
 ANNOUNCE_CHAT_STATE = (_APP_ROOT / "state" / "announce_chat.json").resolve()
+DINGTALK_SESSION_STATE = (
+    _APP_ROOT / "state" / "dingtalk_session_replies.json"
+).resolve()
 SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()
 
-CORE_HEARTBEAT_PATH = (_AUTO / "state" / "heartbeat").resolve()
+CORE_HEARTBEAT_PATH = _PRIMARY.heartbeat_path
 # Background poll: announce core down after this age.
 CORE_HEARTBEAT_STALE_SEC = 15.0
 # On user submit: treat core as unavailable sooner (≈2 missed heartbeats).

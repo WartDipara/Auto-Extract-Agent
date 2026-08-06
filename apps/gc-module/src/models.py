@@ -10,6 +10,8 @@ class ArtifactGroup:
 
     task_id: str
     reason: str
+    module_id: str = ""
+    tasks_table: str = "tasks"
     workspace: Path | None = None
     result_csvs: list[Path] = field(default_factory=list)
     buf_done: Path | None = None

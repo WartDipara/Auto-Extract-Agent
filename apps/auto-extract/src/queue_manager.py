@@ -43,6 +43,7 @@ def _task_to_dict(task: Task) -> dict:
         "finished_at": task.finished_at,
         "im_delivered_at": task.im_delivered_at,
         "im_chat_id": task.im_chat_id,
+        "im_sender_id": task.im_sender_id,
     }
 
 
@@ -81,10 +82,11 @@ def load() -> None:
 
 
 def enqueue_urls(
-    urls: list, source_file: str, *, im_chat_id: str = ""
+    urls: list, source_file: str, *, im_chat_id: str = "", im_sender_id: str = ""
 ) -> list:
     created: list[Task] = []
     chat = (im_chat_id or "").strip()
+    sender = (im_sender_id or "").strip()
     with _lock:
         for url in urls:
             url = (url or "").strip()
@@ -98,11 +100,18 @@ def enqueue_urls(
                 source_file=source_file,
                 status="queued",
                 im_chat_id=chat,
+                im_sender_id=sender,
             )
             task_store.insert_task(task)
             _memory[task.task_id] = task
             created.append(task)
-            _log.info("enqueued %s %s chat=%s", task_id, url, chat or "-")
+            _log.info(
+                "enqueued %s %s chat=%s sender=%s",
+                task_id,
+                url,
+                chat or "-",
+                sender or "-",
+            )
         task_store.set_next_seq(_state.next_seq)
         _write_status_unlocked()
     for task in created:

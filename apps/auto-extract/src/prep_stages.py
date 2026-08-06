@@ -7,18 +7,18 @@ from pathlib import Path
 import config
 from downloader import download
 from errors import TaskError
-from prep.adb_device import AdbDevice
-from prep.debuggable_apk import (
+from shared.archive_contract import task_layout
+from shared.prep.adb_device import AdbDevice
+from shared.prep.debuggable_apk import (
     extract_apk_zip,
     make_debuggable_signed_apk,
     package_name_from_apk,
 )
-from prep.device_handlers import register_device_handlers
-from prep.device_router import dispatch as dispatch_device
-from prep.hotfix_pull import hotfix_has_content, pull_hotfix_candidates
-from prep.ocr_gate import wait_until_entry_screen
-from prep.workspace import clear_signed_apks
-from shared.archive_contract import task_layout
+from shared.prep.device_handlers import register_device_handlers
+from shared.prep.device_router import dispatch as dispatch_device
+from shared.prep.hotfix_pull import hotfix_has_content, pull_hotfix_candidates
+from shared.prep.ocr_gate import wait_until_entry_screen
+from shared.prep.workspace import clear_signed_apks
 
 register_device_handlers()
 

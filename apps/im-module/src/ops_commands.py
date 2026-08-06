@@ -3,36 +3,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-LEDGER_STATUSES = frozenset(
-    {
-        "queued",
-        "downloaded",
-        "patched",
-        "on_device",
-        "device_done",
-        "on_extract",
-        "extract_done",
-        "success",
-        "decrypt_failed",
-        "assets_missing",
-        "abnormal_exit",
-        "failed",
-        "timeout",
-    }
-)
+from shared.module_registry import primary_module
 
-TERMINAL_STATUSES = frozenset(
-    {
-        "success",
-        "decrypt_failed",
-        "assets_missing",
-        "abnormal_exit",
-        "failed",
-        "timeout",
-    }
-)
+_PRIMARY = primary_module()
 
-ACTIVE_STATUSES = frozenset(s for s in LEDGER_STATUSES if s not in TERMINAL_STATUSES)
+LEDGER_STATUSES = frozenset(_PRIMARY.active_statuses | _PRIMARY.terminal_statuses)
+TERMINAL_STATUSES = frozenset(_PRIMARY.terminal_statuses)
+ACTIVE_STATUSES = frozenset(_PRIMARY.active_statuses)
 
 _HELP_ALIASES = frozenset({"help", "?"})
 _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)

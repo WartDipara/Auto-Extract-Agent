@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,13 +22,10 @@ def parse_utc(raw: str) -> datetime | None:
 
 
 def is_aged(raw: str, *, retention_sec: float | None = None, now: float | None = None) -> bool:
-    """True when timestamp is parseable and at least retention_sec old."""
     dt = parse_utc(raw)
     if dt is None:
         return False
     limit = config.RETENTION_SEC if retention_sec is None else retention_sec
-    import time
-
     current = time.time() if now is None else now
     return (current - dt.timestamp()) >= limit
 
@@ -37,19 +35,19 @@ def row_eligible(
     *,
     retention_sec: float | None = None,
     now: float | None = None,
+    active_statuses: frozenset[str] | None = None,
+    terminal_statuses: frozenset[str] | None = None,
 ) -> tuple[bool, str]:
-    """
-    Return (ok, reason).
-
-    ok reasons: delivered | no_im_chat
-    reject reasons: not_terminal | active | delivered_too_young |
-                    awaiting_im_delivery | no_im_chat_too_young |
-                    timestamp_unparseable
-    """
+    active = active_statuses if active_statuses is not None else config.ACTIVE_STATUSES
+    terminal = (
+        terminal_statuses
+        if terminal_statuses is not None
+        else config.TERMINAL_STATUSES
+    )
     status = str(row.get("status") or "").strip()
-    if status in config.ACTIVE_STATUSES:
+    if status in active:
         return False, "active"
-    if status not in config.TERMINAL_STATUSES:
+    if status not in terminal:
         return False, "not_terminal"
 
     chat = str(row.get("im_chat_id") or "").strip()

@@ -18,7 +18,7 @@ from handlers.get_texts import ensure_worker, handle_get_texts
 from inbox_watcher import scan_existing, start_watcher
 from opencode_session import interrupt_active_run
 import queue_manager
-from prep.device_handlers import register_device_handlers
+from shared.prep.device_handlers import register_device_handlers
 from router import register
 from shared.service_log import setup_service_logging
 

@@ -177,12 +177,12 @@ Chat shows a slim subset; full fields remain in `tasks.db`.
 | Channel | `IM_CHANNEL=feishu` or `dingtalk` (see `.env.example`) |
 | Announce chat | Auto-learn last @ chat (`state/announce_chat.json`); optional pin via `ANNOUNCE_CHAT_ID` / `DINGTALK_TEST_CHAT_ID` |
 | Lifecycle | Online message includes usage; offline to announce chat; core fault/recover is edge-only (no spam) |
-| Core heartbeat | Module A writes `state/heartbeat` every 5s. IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
-| Ledger DB | default `apps/auto-extract/state/tasks.db` (`TASKS_DB`; IM and Module A must share the path) |
+| Core heartbeat | Each registered core writes its own `state/heartbeat` every 5s (get-texts under auto-extract). IM background stale=15s; on submit uses 10s and folds a deferral note into the enqueue ack (no duplicate core-down broadcast). |
+| Ledger DB | Shared file `apps/auto-extract/state/tasks.db`; **one table per module** (get-texts → `tasks`). Registry: `shared/module_registry.py`. DingTalk stores `im_sender_id` (staffId) for @-back replies. |
 | Timestamps | DB stores UTC `…Z`; IM displays Asia/Shanghai |
 | Query export dir | default `apps/im-module/state/query_exports` (`QUERY_EXPORT_DIR`) |
-| Runtime | Module A and IM both required; IM alone cannot extract |
-| IM restart | Safe: `im_chat_id` is stored on each task; undelivered terminals are re-polled from `tasks.db` |
+| Runtime | Registered core(s) and IM both required; IM alone cannot extract |
+| IM restart | Safe: unfinished deliveries re-polled from `tasks.db` (`im_chat_id` / `im_sender_id`). DingTalk also restores unexpired `sessionWebhook` from `state/dingtalk_session_replies.json` so @-back can continue after a brief outage. |
 
 
 Start IM:

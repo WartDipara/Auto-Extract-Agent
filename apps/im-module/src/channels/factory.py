@@ -28,5 +28,6 @@ def create_channel(cfg: Any) -> Channel:
             client_id,
             client_secret,
             robot_code=robot_code,
+            session_state_path=getattr(cfg, "DINGTALK_SESSION_STATE", None),
         )
     raise SystemExit(f"unknown IM_CHANNEL={key!r}; use feishu | dingtalk")

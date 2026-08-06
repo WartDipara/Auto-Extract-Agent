@@ -60,7 +60,7 @@ def run_once(*, dry_run: bool) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="GC Module A artifacts after unified retention."
+        description="GC registered module artifacts after unified retention."
     )
     parser.add_argument(
         "--once",
@@ -96,6 +96,14 @@ def main(argv: list[str] | None = None) -> int:
         interval,
     )
     _log.info("TASKS_DB=%s", config.TASKS_DB)
+    for spec in config.MODULES:
+        _log.info(
+            "module=%s table=%s workspace=%s buf_done=%s",
+            spec.module_id,
+            spec.tasks_table,
+            spec.workspace_root,
+            spec.buf_done_dir,
+        )
     _log.info("WORKSPACE_ROOT=%s", config.WORKSPACE_ROOT)
     _log.info("RESULT_DIR=%s", config.RESULT_DIR)
     _log.info("BUF_DONE_DIR=%s", config.BUF_DONE_DIR)

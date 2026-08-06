@@ -7,10 +7,10 @@ import threading
 from pathlib import Path
 
 import uiautomator2 as u2
-from prep.adb_device import AdbDevice
-from prep.device_router import DefaultHandler
-from prep.ocr_util import find_tap_for_texts, ocr_image
-from prep.screen_coord import resolve_screen_coord_space
+from ..adb_device import AdbDevice
+from ..device_router import DefaultHandler
+from ..ocr_util import find_tap_for_texts, ocr_image
+from ..screen_coord import resolve_screen_coord_space
 
 _log = logging.getLogger(__name__)
 

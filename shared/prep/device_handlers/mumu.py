@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 
 from errors import TaskError
-from prep.adb_device import AdbDevice
-from prep.device_router import DefaultHandler, parse_rotation_token
+from ..adb_device import AdbDevice
+from ..device_router import DefaultHandler, parse_rotation_token
 
 _log = logging.getLogger(__name__)
 

@@ -73,6 +73,27 @@ def gc_env(tmp_path, monkeypatch, request):
     monkeypatch.setattr(config, "RETENTION_DAYS", 7.0)
     monkeypatch.setattr(config, "RETENTION_SEC", 7.0 * 86400.0)
     monkeypatch.setattr(config, "DRY_RUN_ENV", False)
+    monkeypatch.setattr(config, "TASKS_TABLE", "tasks")
+
+    from shared.module_registry import ModuleSpec
+
+    test_spec = ModuleSpec(
+        module_id="get-texts",
+        app_root=tmp_path.resolve(),
+        inbox_dir=(tmp_path / "inbox").resolve(),
+        workspace_root=workspace.resolve(),
+        downloads_dir=downloads.resolve(),
+        result_dir=result.resolve(),
+        buf_done_dir=buf.resolve(),
+        state_dir=state.resolve(),
+        heartbeat_path=(state / "heartbeat").resolve(),
+        tasks_table="tasks",
+        meta_seq_key="next_seq",
+        inbox_route="get-texts",
+        active_statuses=frozenset(config.ACTIVE_STATUSES),
+        terminal_statuses=frozenset(config.TERMINAL_STATUSES),
+    )
+    monkeypatch.setattr(config, "MODULES", [test_spec])
 
     def _cleanup() -> None:
         _purge_gc_modules()

@@ -24,6 +24,10 @@ def main() -> None:
     _log.info("im-module channel=%s", config.IM_CHANNEL)
     _log.info("im-module inbox=%s", config.INBOX_DIR)
     _log.info("im-module tasks_db=%s", config.TASKS_DB)
+    _log.info(
+        "im-module modules=%s",
+        [f"{m.module_id}:{m.tasks_table}" for m in config.MODULES],
+    )
     Courier(create_channel(config)).start()
 
 

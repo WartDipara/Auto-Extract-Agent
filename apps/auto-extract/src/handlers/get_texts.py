@@ -30,10 +30,15 @@ def handle_get_texts(body: dict, source_path: Path):
         _move_processed(source_path)
         return
     im_chat_id = ""
+    im_sender_id = ""
     if isinstance(body, dict):
         im_chat_id = str(body.get("im_chat_id") or "").strip()
+        im_sender_id = str(body.get("im_sender_id") or "").strip()
     ensure_worker()
     queue_manager.enqueue_urls(
-        urls, source_file=source_path.name, im_chat_id=im_chat_id
+        urls,
+        source_file=source_path.name,
+        im_chat_id=im_chat_id,
+        im_sender_id=im_sender_id,
     )
     _move_processed(source_path)

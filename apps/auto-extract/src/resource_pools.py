@@ -6,7 +6,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from prep.adb_device import AdbDevice
+from shared.prep.adb_device import AdbDevice
 
 _log = logging.getLogger(__name__)
 

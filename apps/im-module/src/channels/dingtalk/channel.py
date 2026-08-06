@@ -4,21 +4,26 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from time import monotonic
-from typing import Callable
+from typing import Callable, Sequence
 
 from dingtalk_stream import AckMessage, ChatbotMessage, Credential, DingTalkStreamClient
 from dingtalk_stream.chatbot import ChatbotHandler
 
-from channels.base import MessageHandler
-from channels.dingtalk.openapi import DingTalkOpenApi, resolve_send_file_meta
+from channels.base import IncomingChat, MessageHandler
+from channels.dingtalk.openapi import (
+    DingTalkOpenApi,
+    SessionReplyTarget,
+    resolve_send_file_meta,
+)
 from channels.dingtalk.session import parse_session_key, session_from_incoming
+from channels.dingtalk.session_store import load_session_replies, save_session_replies
 
 _log = logging.getLogger(__name__)
 
-# Strip leading @tokens DingTalk may leave in text.content after mention.
 _AT_TOKEN_RE = re.compile(r"@\S+")
 
 
@@ -63,7 +68,6 @@ def _rule_text_only(msg: ChatbotMessage) -> bool:
 
 @_register_rule
 def _rule_mention_or_oto(msg: ChatbotMessage) -> bool:
-    """1:1 always; group requires bot in at-list (DingTalk isInAtList)."""
     ctype = str(msg.conversation_type or "")
     if ctype == "1":
         return True
@@ -93,6 +97,7 @@ class DingTalkChannel:
         client_secret: str,
         *,
         robot_code: str | None = None,
+        session_state_path: Path | str | None = None,
     ):
         self._client_id = client_id
         self._client_secret = client_secret
@@ -101,6 +106,22 @@ class DingTalkChannel:
         self._on_message: MessageHandler | None = None
         self._seen = _SeenIds()
         self._stop = threading.Event()
+        self._reply_lock = threading.Lock()
+        self._session_state_path = (
+            Path(session_state_path)
+            if session_state_path
+            else None
+        )
+        self._session_replies: dict[str, SessionReplyTarget] = {}
+        if self._session_state_path is not None:
+            loaded = load_session_replies(self._session_state_path)
+            self._session_replies.update(loaded)
+            if loaded:
+                _log.info(
+                    "dingtalk session store loaded path=%s chats=%s",
+                    self._session_state_path,
+                    len(loaded),
+                )
 
     def stop(self) -> None:
         self._stop.set()
@@ -120,8 +141,6 @@ class DingTalkChannel:
             self._robot_code,
             ChatbotMessage.TOPIC,
         )
-        # Avoid SDK start_forever(): only breaks on KeyboardInterrupt and always
-        # sleeps/reconnects, so SystemExit / blips look like a hang.
         while not self._stop.is_set():
             try:
                 asyncio.run(client.start())
@@ -155,10 +174,46 @@ class DingTalkChannel:
         text = _extract_text(msg)
         if text is None:
             return
+        chat_id = target.to_key()
+        sender_id = (msg.sender_staff_id or "").strip()
+        sender_name = (msg.sender_nick or "").strip()
+        self._remember_session_reply(chat_id, msg, sender_id=sender_id, sender_name=sender_name)
         if self._on_message:
-            self._on_message(target.to_key(), text)
+            self._on_message(
+                IncomingChat(
+                    chat_id=chat_id,
+                    text=text,
+                    sender_id=sender_id,
+                    sender_name=sender_name,
+                )
+            )
 
-    def reply_text(self, chat_id: str, text: str) -> None:
+    def reply_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        at_user_ids: Sequence[str] | None = None,
+    ) -> None:
+        at_ids = [u.strip() for u in (at_user_ids or ()) if (u or "").strip()]
+        session_reply = self._session_replies.get(chat_id)
+        if session_reply is not None and session_reply.alive():
+            try:
+                self._api.reply_session_text(
+                    session_reply,
+                    text,
+                    at_user_ids=at_ids or None,
+                )
+                return
+            except Exception:
+                _log.exception(
+                    "dingtalk sessionWebhook reply failed; fallback openapi chat_id=%s",
+                    chat_id,
+                )
+        elif session_reply is not None:
+            with self._reply_lock:
+                self._session_replies.pop(chat_id, None)
+                self._persist_session_replies_unlocked()
         target = parse_session_key(chat_id)
         try:
             if target.kind == "group":
@@ -199,12 +254,45 @@ class DingTalkChannel:
             )
             raise
 
+    def _remember_session_reply(
+        self,
+        chat_id: str,
+        msg: ChatbotMessage,
+        *,
+        sender_id: str,
+        sender_name: str,
+    ) -> None:
+        webhook = (msg.session_webhook or "").strip()
+        if not webhook:
+            return
+        expire_at = int(msg.session_webhook_expired_time or 0)
+        if expire_at <= 0:
+            expire_at = int(time.time() * 1000) + 3_600_000
+        with self._reply_lock:
+            self._session_replies[chat_id] = SessionReplyTarget(
+                webhook=webhook,
+                expire_at_ms=expire_at,
+                sender_staff_id=sender_id,
+                sender_nick=sender_name,
+            )
+            self._persist_session_replies_unlocked()
+
+    def _persist_session_replies_unlocked(self) -> None:
+        if self._session_state_path is None:
+            return
+        try:
+            save_session_replies(self._session_state_path, self._session_replies)
+        except OSError:
+            _log.exception(
+                "dingtalk session store write failed path=%s",
+                self._session_state_path,
+            )
+
 
 def _extract_text(msg: ChatbotMessage) -> str | None:
     if msg.text is None or msg.text.content is None:
         return None
     raw = str(msg.text.content)
-    # Remove @mentions; keep the JSON / command body.
     cleaned = _AT_TOKEN_RE.sub(" ", raw)
     cleaned = " ".join(cleaned.split()).strip()
     return cleaned if cleaned else None

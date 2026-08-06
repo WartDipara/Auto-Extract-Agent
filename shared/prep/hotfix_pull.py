@@ -6,8 +6,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from prep.adb_device import AdbDevice
-from prep.workspace import rmtree_force
+from .adb_device import AdbDevice
+from .workspace import rmtree_force
 
 _log = logging.getLogger(__name__)
 
@@ -20,8 +20,7 @@ _DATA_EXCLUDE_NAMES = {
     "crashsdk",
     "filedownloader",
 }
-# ShadowPluginManager / ShadowPlugin_* 等一律不拉
-_DATA_EXCLUDE_PREFIXES = ("ShadowPlugin",)
+# ShadowPluginManager / ShadowPlugin_* 等一律不�?_DATA_EXCLUDE_PREFIXES = ("ShadowPlugin",)
 
 # Android/data/.../files exclusions
 _SDCARD_EXCLUDE_NAMES = {

@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 
-from prep.adb_device import AdbDevice
+from .adb_device import AdbDevice
 
 _log = logging.getLogger(__name__)
 

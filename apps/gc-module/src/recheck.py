@@ -25,7 +25,7 @@ def recheck_group(
         return _recheck_orphan_stop(group, now=current)
 
     task_id = group.task_id
-    row = load_task(task_id)
+    row = load_task(task_id, table=group.tasks_table or None)
     if row is None:
         # DB row vanished: only keep workspace if .stop orphan aged.
         if group.workspace and has_stop(group.workspace):
@@ -33,6 +33,8 @@ def recheck_group(
                 ArtifactGroup(
                     task_id=task_id,
                     reason="orphan_stop",
+                    module_id=group.module_id,
+                    tasks_table=group.tasks_table,
                     workspace=group.workspace,
                 ),
                 now=current,
@@ -80,7 +82,7 @@ def _recheck_orphan_stop(
     root = group.workspace
     if root is None or not root.is_dir() or not has_stop(root):
         return False, "stop_missing"
-    row = load_task(group.task_id)
+    row = load_task(group.task_id, table=group.tasks_table or None)
     if row is not None:
         status = str(row.get("status") or "")
         if status in config.ACTIVE_STATUSES:
@@ -108,7 +110,7 @@ def _recheck_orphan_download(
     path = group.downloads[0]
     if not path.is_file():
         return False, "download_missing"
-    tasks = load_all_tasks()
+    tasks = load_all_tasks(table=group.tasks_table or None)
     active_filenames = {
         str(t.get("filename") or "").strip()
         for t in tasks

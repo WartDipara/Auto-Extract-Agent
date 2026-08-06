@@ -33,8 +33,8 @@ TEST_APK_URL = (
 
 def test_prep_hotfix_pull():
     import config
-    from prep import run_device_prep
-    from prep.hotfix_pull import hotfix_has_content
+    from shared.prep.hotfix_pull import hotfix_has_content
+    from prep_stages import run_device_prep
     from shared.archive_contract import reset_task_workspace
 
     print("=== PREP E2E START ===", flush=True)
