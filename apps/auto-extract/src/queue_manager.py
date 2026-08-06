@@ -8,6 +8,7 @@ from pathlib import Path
 import config
 import pipeline_queues as pq
 import task_store
+from downloader import filename_from_url
 from models import TERMINAL_STATUSES, QueueState, Task
 from shared.archive_contract import utc_now
 
@@ -45,6 +46,7 @@ def _task_to_dict(task: Task) -> dict:
         "im_chat_id": task.im_chat_id,
         "im_sender_id": task.im_sender_id,
         "im_deliver_error": task.im_deliver_error,
+        "run_gen": int(task.run_gen or 0),
     }
 
 
@@ -55,7 +57,10 @@ def _write_status_unlocked() -> None:
         for t in _memory.values()
         if t.status not in TERMINAL_STATUSES
     ]
-    recent = [_task_to_dict(t) for t in task_store.list_recent_done(config.QUEUE_RECENT_DONE_MAX)]
+    recent = [
+        _task_to_dict(t)
+        for t in task_store.list_recent_done(config.QUEUE_RECENT_DONE_MAX)
+    ]
     payload = {
         "updated_at": utc_now(),
         "active": active,
@@ -97,6 +102,54 @@ def urls_already_active(urls: list) -> bool:
     return all(task_store.has_active_url(u) for u in cleaned)
 
 
+def _reset_for_overwrite(
+    existing: Task,
+    *,
+    url: str,
+    source_file: str,
+    filename: str,
+    im_chat_id: str,
+    im_sender_id: str,
+) -> Task:
+    """Same task_id/filename row: bump run_gen and requeue from download."""
+    new_gen = int(existing.run_gen or 0) + 1
+    updated = task_store.update_task(
+        existing.task_id,
+        url=url,
+        source_file=source_file,
+        filename=filename,
+        label="",
+        labels={},
+        status="queued",
+        error="",
+        result_csv="",
+        session_id="",
+        buf_done_zip="",
+        adb_serial="",
+        hotfix_has_files="",
+        hotfix_pull_source="",
+        screen_reached="",
+        finished_at="",
+        im_delivered_at="",
+        im_deliver_error="",
+        im_chat_id=im_chat_id,
+        im_sender_id=im_sender_id,
+        run_gen=new_gen,
+    )
+    if updated is None:
+        raise RuntimeError(f"overwrite failed task_id={existing.task_id}")
+    _memory[updated.task_id] = updated
+    _log.info(
+        "overwrite enqueued %s filename=%s gen=%s chat=%s sender=%s",
+        updated.task_id,
+        filename,
+        new_gen,
+        im_chat_id or "-",
+        im_sender_id or "-",
+    )
+    return updated
+
+
 def enqueue_urls(
     urls: list, source_file: str, *, im_chat_id: str = "", im_sender_id: str = ""
 ) -> list:
@@ -114,13 +167,29 @@ def enqueue_urls(
             url = (url or "").strip()
             if not url:
                 continue
-            # Same job may arrive again via a new im_*.json while still active.
-            if task_store.has_active_url(url):
-                _log.info(
-                    "skip enqueue; url already active source=%s url=%s",
-                    source or "-",
-                    url,
+            filename = filename_from_url(url)
+            existing = task_store.get_task_by_filename(filename)
+            if existing is not None:
+                # True overwrite: reset same row and re-run from download.
+                if existing.status == "on_extract":
+                    try:
+                        from opencode_session import interrupt_active_run
+
+                        interrupt_active_run()
+                    except Exception:
+                        _log.exception(
+                            "interrupt on overwrite failed task_id=%s",
+                            existing.task_id,
+                        )
+                task = _reset_for_overwrite(
+                    existing,
+                    url=url,
+                    source_file=source_file,
+                    filename=filename,
+                    im_chat_id=chat,
+                    im_sender_id=sender,
                 )
+                created.append(task)
                 continue
             task_id = f"t-{_state.next_seq:04d}"
             _state.next_seq += 1
@@ -128,17 +197,20 @@ def enqueue_urls(
                 task_id=task_id,
                 url=url,
                 source_file=source_file,
+                filename=filename,
                 status="queued",
                 im_chat_id=chat,
                 im_sender_id=sender,
+                run_gen=0,
             )
             task_store.insert_task(task)
             _memory[task.task_id] = task
             created.append(task)
             _log.info(
-                "enqueued %s %s chat=%s sender=%s",
+                "enqueued %s %s filename=%s chat=%s sender=%s",
                 task_id,
                 url,
+                filename,
                 chat or "-",
                 sender or "-",
             )
@@ -149,8 +221,12 @@ def enqueue_urls(
     return created
 
 
-def update_task(task_id: str, **fields) -> Task | None:
-    updated = task_store.update_task(task_id, **fields)
+def update_task(
+    task_id: str, *, expected_run_gen: int | None = None, **fields
+) -> Task | None:
+    updated = task_store.update_task(
+        task_id, expected_run_gen=expected_run_gen, **fields
+    )
     if updated is None:
         return None
     with _lock:
@@ -189,6 +265,7 @@ def append_session_record(task: Task):
         "result_csv": task.result_csv,
         "source_file": task.source_file,
         "finished_at": utc_now(),
+        "run_gen": int(task.run_gen or 0),
     }
     with config.SESSIONS_FILE.open("a", encoding="utf-8") as fp:
         fp.write(json.dumps(record, ensure_ascii=False) + "\n")

@@ -33,6 +33,8 @@ class Task:
     im_chat_id: str = ""
     im_sender_id: str = ""
     im_deliver_error: str = ""
+    # Bumped on filename overwrite so in-flight stages can detect stale work.
+    run_gen: int = 0
 
 
 @dataclass

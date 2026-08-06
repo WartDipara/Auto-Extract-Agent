@@ -107,9 +107,19 @@ def _signed_path(task: Task) -> Path | None:
     return path if path.is_file() else None
 
 
+def _run_gen(task: Task) -> int:
+    return int(getattr(task, "run_gen", 0) or 0)
+
+
+def _same_run(task_id: str, run_gen: int) -> bool:
+    fresh = queue_manager.get_task(task_id)
+    return fresh is not None and int(fresh.run_gen or 0) == int(run_gen)
+
+
 def _download_loop() -> None:
     while True:
         task = pq.Q_DOWNLOAD.get()
+        run_gen = _run_gen(task)
         try:
             with stage_scope("download"):
                 apk_path = download(task.url)
@@ -120,9 +130,16 @@ def _download_loop() -> None:
                     filename=apk_path.name,
                     labels=labels,
                     label=primary_label(labels),
+                    expected_run_gen=run_gen,
                 )
                 if updated:
                     pq.put_patch(updated)
+                else:
+                    _log.info(
+                        "download stale drop task_id=%s gen=%s",
+                        task.task_id,
+                        run_gen,
+                    )
         except Exception as exc:
             emit(normalize(exc), task=task, task_root=None)
         finally:
@@ -132,13 +149,18 @@ def _download_loop() -> None:
 def _patch_loop() -> None:
     while True:
         task = pq.Q_PATCH.get()
+        run_gen = _run_gen(task)
         try:
             apk = _apk_path(task)
             if apk is None:
-                queue_manager.update_task(task.task_id, status="queued", filename="")
-                fresh = queue_manager.get_task(task.task_id)
-                if fresh:
-                    pq.put_download(fresh)
+                updated = queue_manager.update_task(
+                    task.task_id,
+                    status="queued",
+                    filename="",
+                    expected_run_gen=run_gen,
+                )
+                if updated:
+                    pq.put_download(updated)
                 continue
             with stage_scope("patch"):
                 task_key = apk.stem
@@ -148,9 +170,16 @@ def _patch_loop() -> None:
                     task.task_id,
                     status="patched",
                     filename=apk.name,
+                    expected_run_gen=run_gen,
                 )
                 if updated:
                     pq.put_device(updated)
+                else:
+                    _log.info(
+                        "patch stale drop task_id=%s gen=%s",
+                        task.task_id,
+                        run_gen,
+                    )
         except Exception as exc:
             emit(
                 normalize(exc),
@@ -164,6 +193,7 @@ def _patch_loop() -> None:
 def _device_loop() -> None:
     while True:
         task = pq.Q_DEVICE.get()
+        run_gen = _run_gen(task)
         serial = ""
         try:
             apk = _apk_path(task)
@@ -179,11 +209,19 @@ def _device_loop() -> None:
             serial = adb_pool.acquire(
                 config.ADB_SERIAL or None
             )
-            queue_manager.update_task(
+            claimed = queue_manager.update_task(
                 task.task_id,
                 status="on_device",
                 adb_serial=serial,
+                expected_run_gen=run_gen,
             )
+            if claimed is None:
+                _log.info(
+                    "device stale before work task_id=%s gen=%s",
+                    task.task_id,
+                    run_gen,
+                )
+                continue
             with stage_scope("device"):
                 task_root = config.WORKSPACE_ROOT / apk.stem
                 prep = run_device_stage(
@@ -200,9 +238,16 @@ def _device_loop() -> None:
                 hotfix_has_files="yes" if prep.hotfix_has_files else "no",
                 hotfix_pull_source=prep.pull_source or "none",
                 screen_reached=prep.screen_reached or "",
+                expected_run_gen=run_gen,
             )
             if updated:
                 pq.put_extract(updated)
+            else:
+                _log.info(
+                    "device stale drop task_id=%s gen=%s",
+                    task.task_id,
+                    run_gen,
+                )
         except TimeoutError:
             _fail(task, "DEVICE_WAIT_TIMEOUT", "adb wait timeout", "device")
         except Exception as exc:
@@ -220,11 +265,23 @@ def _device_loop() -> None:
 def _extract_loop() -> None:
     while True:
         task = pq.Q_EXTRACT.get()
+        run_gen = _run_gen(task)
         held = False
         try:
             _pools()[1].acquire()
             held = True
-            queue_manager.update_task(task.task_id, status="on_extract")
+            claimed = queue_manager.update_task(
+                task.task_id,
+                status="on_extract",
+                expected_run_gen=run_gen,
+            )
+            if claimed is None:
+                _log.info(
+                    "extract stale before work task_id=%s gen=%s",
+                    task.task_id,
+                    run_gen,
+                )
+                continue
             task_root = _task_root_for(task)
             if task_root is None:
                 _fail(task, "WORKSPACE_MISSING", "task workspace missing", "extract")
@@ -245,13 +302,21 @@ def _extract_loop() -> None:
                         result.returncode,
                     )
             updated = queue_manager.update_task(
-                task.task_id, status="extract_done"
+                task.task_id,
+                status="extract_done",
+                expected_run_gen=run_gen,
             )
             if held:
                 _pools()[1].release()
                 held = False
             if updated:
                 pq.put_archive(updated)
+            else:
+                _log.info(
+                    "extract stale drop task_id=%s gen=%s",
+                    task.task_id,
+                    run_gen,
+                )
         except TimeoutError:
             _fail(task, "OPENCODE_WAIT_TIMEOUT", "opencode wait timeout", "extract")
         except Exception as exc:
@@ -269,6 +334,7 @@ def _extract_loop() -> None:
 def _archive_loop() -> None:
     while True:
         task = pq.Q_ARCHIVE.get()
+        run_gen = _run_gen(task)
         filename = task.filename or ""
         try:
             task_root = _task_root_for(task)
@@ -291,7 +357,6 @@ def _archive_loop() -> None:
                 if not session_id:
                     session_id = OpenCodeSessionManager().lookup_session_id(task_key)
                 archived = archive_csv(csv_path, task_key, label, body_text)
-                enqueue_buf_done(archived, task_id=task.task_id)
                 append_session_to_log(filename, session_id)
                 err_line = ""
                 error_info = None
@@ -315,12 +380,19 @@ def _archive_loop() -> None:
                     session_id=session_id,
                     error=err_line,
                     buf_done_zip=queue_manager.buf_done_zip_for(str(archived)),
+                    expected_run_gen=run_gen,
                 )
-                if updated is not None:
-                    queue_manager.append_session_record(updated)
+                if updated is None:
+                    _log.info(
+                        "archive stale drop task_id=%s gen=%s",
+                        task.task_id,
+                        run_gen,
+                    )
+                    continue
+                enqueue_buf_done(archived, task_id=task.task_id)
+                queue_manager.append_session_record(updated)
                 layout = task_layout(task_root)
                 export_path = layout["opencode_export"]
-                prep_task = updated or task
                 meta = {
                     "task_id": task.task_id,
                     "task_key": task_key,
@@ -332,10 +404,11 @@ def _archive_loop() -> None:
                     "error": err_line,
                     "result_csv": str(archived),
                     "opencode_export": str(export_path) if export_path.is_file() else "",
-                    "hotfix_has_files": prep_task.hotfix_has_files or "",
-                    "hotfix_pull_source": prep_task.hotfix_pull_source or "",
-                    "screen_reached": prep_task.screen_reached or "",
+                    "hotfix_has_files": updated.hotfix_has_files or "",
+                    "hotfix_pull_source": updated.hotfix_pull_source or "",
+                    "screen_reached": updated.screen_reached or "",
                     "finished_at": utc_now(),
+                    "run_gen": run_gen,
                 }
                 if error_info is not None:
                     meta["error_info"] = error_info.to_dict()
@@ -347,7 +420,9 @@ def _archive_loop() -> None:
                 task_root=_task_root_for(task),
             )
         finally:
-            cleanup_download_apk(filename)
+            # Do not delete APK if a newer overwrite run owns this filename.
+            if filename and _same_run(task.task_id, run_gen):
+                cleanup_download_apk(filename)
             pq.Q_ARCHIVE.task_done()
 
 
@@ -361,16 +436,19 @@ def recover_and_enqueue() -> None:
     for task in active:
         try:
             status = task.status
+            run_gen = _run_gen(task)
             if status == "queued":
                 pq.put_download(task)
             elif status == "downloaded":
                 if _apk_path(task) is None:
-                    queue_manager.update_task(
-                        task.task_id, status="queued", filename=""
+                    updated = queue_manager.update_task(
+                        task.task_id,
+                        status="queued",
+                        filename="",
+                        expected_run_gen=run_gen,
                     )
-                    fresh = queue_manager.get_task(task.task_id)
-                    if fresh:
-                        pq.put_download(fresh)
+                    if updated:
+                        pq.put_download(updated)
                 else:
                     pq.put_patch(task)
             elif status == "patched":
@@ -380,6 +458,7 @@ def recover_and_enqueue() -> None:
                     task.task_id,
                     status="failed",
                     error="PIPELINE_INTERRUPTED:on_device",
+                    expected_run_gen=run_gen,
                 )
             elif status == "device_done":
                 pq.put_extract(task)
@@ -388,6 +467,7 @@ def recover_and_enqueue() -> None:
                     task.task_id,
                     status="failed",
                     error="PIPELINE_INTERRUPTED:on_extract",
+                    expected_run_gen=run_gen,
                 )
             elif status == "extract_done":
                 pq.put_archive(task)

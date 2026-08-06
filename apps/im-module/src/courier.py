@@ -535,15 +535,6 @@ class Courier:
                 remove_pending(state, filename)
                 continue
             urls = [u for u in (item.get("urls") or []) if str(u).strip()]
-            # Same job already running under another inbox filename — do not resubmit.
-            if urls and _urls_already_active(urls):
-                _log.info(
-                    "pending inbox cleared; urls already active file=%s",
-                    filename,
-                )
-                remove_pending(state, filename)
-                self._pending_exhausted_warned.discard(filename)
-                continue
             path = Path(str(item.get("inbox_path") or "")).expanduser()
             if not path.is_absolute():
                 path = Path(config.INBOX_DIR) / filename
@@ -1074,41 +1065,6 @@ def _source_accepted(source_file: str) -> bool:
             if row is not None:
                 return True
         return False
-    finally:
-        conn.close()
-
-
-def _urls_already_active(urls: list[str]) -> bool:
-    cleaned = [(u or "").strip() for u in urls if (u or "").strip()]
-    if not cleaned:
-        return False
-    db = Path(config.TASKS_DB)
-    if not db.is_file():
-        return False
-    uri = f"file:{db.resolve().as_posix()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, timeout=30.0)
-    try:
-        for url in cleaned:
-            found = False
-            for spec in config.MODULES:
-                active = tuple(sorted(spec.active_statuses))
-                if not active:
-                    continue
-                placeholders = ",".join("?" * len(active))
-                try:
-                    row = conn.execute(
-                        f"SELECT 1 FROM {spec.tasks_table} "
-                        f"WHERE url=? AND status IN ({placeholders}) LIMIT 1",
-                        (url, *active),
-                    ).fetchone()
-                except sqlite3.OperationalError:
-                    continue
-                if row is not None:
-                    found = True
-                    break
-            if not found:
-                return False
-        return True
     finally:
         conn.close()
 

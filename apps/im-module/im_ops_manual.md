@@ -163,8 +163,8 @@ Optional lines: `原因：…` (task error), `回传说明：…` (delivery note
 @bot export table success
 ```
 
-- Unique by `filename` (latest `updated_at` wins).
-- Columns: `filename`, `label`, `updated_at`, `finished_at`.
+- Unique by `filename` (latest `updated_at` wins; that row’s `status` / `error` / times overwrite older ones).
+- Columns: `filename`, `label`, `status`, `error`, `updated_at`, `finished_at`.
 - Times in **Asia/Shanghai** as `YYYY-mm-DD: HH:mm`.
 - `all` = every status; otherwise filter by ledger status.
 - Invalid status → short allowed-status hint (includes `all`).

@@ -31,6 +31,8 @@ _DETAIL_COLS = (
 _EXPORT_TABLE_COLS = (
     "filename",
     "label",
+    "status",
+    "error",
     "updated_at",
     "finished_at",
 )
@@ -235,7 +237,11 @@ def _write_export_table_xlsx(rows: list[sqlite3.Row]) -> Path:
 
 
 def _unique_by_filename(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
-    """Keep latest row per filename (rows must be ORDER BY updated_at DESC)."""
+    """filename is the key: keep one row per name, latest updated_at wins.
+
+    Callers must pass rows ORDER BY updated_at DESC so the first hit is newest
+    (status/error/label/times reflect that latest task).
+    """
     seen: set[str] = set()
     out: list[sqlite3.Row] = []
     for row in rows:

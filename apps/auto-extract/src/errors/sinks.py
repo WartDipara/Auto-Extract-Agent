@@ -57,11 +57,14 @@ class QueueSink:
         if not task_id:
             return
         try:
-            queue_manager.update_task(
-                task_id,
-                status=info.status,
-                error=info.to_line(),
-            )
+            expected = getattr(task, "run_gen", None) if task is not None else None
+            kwargs = {
+                "status": info.status,
+                "error": info.to_line(),
+            }
+            if expected is not None:
+                kwargs["expected_run_gen"] = int(expected or 0)
+            queue_manager.update_task(task_id, **kwargs)
         except Exception:
             # Keep worker loops alive; leave an operational breadcrumb.
             _log.exception(

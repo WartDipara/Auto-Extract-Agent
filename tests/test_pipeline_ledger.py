@@ -164,6 +164,178 @@ def test_adb_pool_exclusive(monkeypatch):
     assert held == ["dev-a", "dev-a"]
 
 
+def test_filename_overwrite_bumps_run_gen(tmp_path, monkeypatch):
+    for p in list(sys.path):
+        if "im-module" in p.replace("\\", "/"):
+            sys.path.remove(p)
+    if str(_A_SRC) not in sys.path:
+        sys.path.insert(0, str(_A_SRC))
+    for name in (
+        "config",
+        "task_store",
+        "queue_manager",
+        "pipeline_queues",
+        "models",
+        "downloader",
+    ):
+        sys.modules.pop(name, None)
+
+    import config
+    import pipeline_queues as pq
+    import queue_manager
+    import task_store
+
+    db = tmp_path / "tasks.db"
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(config, "TASKS_DB", db)
+    monkeypatch.setattr(config, "STATE_DIR", state)
+    monkeypatch.setattr(config, "QUEUE_STATUS_FILE", state / "q.json")
+    task_store._conn = None
+    queue_manager.load()
+
+    # Drain any recover leftovers.
+    while not pq.Q_DOWNLOAD.empty():
+        try:
+            pq.Q_DOWNLOAD.get_nowait()
+            pq.Q_DOWNLOAD.task_done()
+        except Exception:
+            break
+
+    first = queue_manager.enqueue_urls(
+        ["https://cdn.example/game.apk"],
+        "im_a.json",
+        im_chat_id="group:old",
+        im_sender_id="u1",
+    )
+    assert len(first) == 1
+    tid = first[0].task_id
+    assert first[0].filename == "game.apk"
+    assert first[0].run_gen == 0
+
+    # Simulate finished run with delivery markers.
+    done = queue_manager.update_task(
+        tid,
+        status="success",
+        label="OldGame",
+        result_csv=str(tmp_path / "old.csv"),
+        buf_done_zip=str(tmp_path / "old.zip"),
+        session_id="ses-old",
+        error="",
+        im_delivered_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:00Z",
+        expected_run_gen=0,
+    )
+    assert done is not None and done.status == "success"
+
+    second = queue_manager.enqueue_urls(
+        ["https://cdn.example/game.apk?x=1"],
+        "im_b.json",
+        im_chat_id="group:new",
+        im_sender_id="u2",
+    )
+    assert len(second) == 1
+    assert second[0].task_id == tid
+    assert second[0].run_gen == 1
+    assert second[0].status == "queued"
+    assert second[0].filename == "game.apk"
+    assert second[0].label == ""
+    assert second[0].result_csv == ""
+    assert second[0].buf_done_zip == ""
+    assert second[0].session_id == ""
+    assert second[0].im_delivered_at == ""
+    assert second[0].finished_at == ""
+    assert second[0].im_chat_id == "group:new"
+    assert second[0].source_file == "im_b.json"
+
+    # Stale gen must not rewrite ledger.
+    stale = queue_manager.update_task(
+        tid, status="failed", error="stale", expected_run_gen=0
+    )
+    assert stale is None
+    cur = queue_manager.get_task(tid)
+    assert cur is not None
+    assert cur.status == "queued"
+    assert cur.run_gen == 1
+    assert cur.error == ""
+
+    # Unique index: only one row for this filename.
+    import sqlite3
+
+    conn = sqlite3.connect(str(db))
+    n = conn.execute(
+        "SELECT COUNT(*) FROM tasks WHERE filename=?", ("game.apk",)
+    ).fetchone()[0]
+    conn.close()
+    assert n == 1
+
+
+def test_filename_dedupe_on_migrate(tmp_path, monkeypatch):
+    for p in list(sys.path):
+        if "im-module" in p.replace("\\", "/"):
+            sys.path.remove(p)
+    if str(_A_SRC) not in sys.path:
+        sys.path.insert(0, str(_A_SRC))
+    for name in ("config", "task_store", "models"):
+        sys.modules.pop(name, None)
+
+    import sqlite3
+
+    import config
+    import task_store
+
+    db = tmp_path / "legacy.db"
+    monkeypatch.setattr(config, "TASKS_DB", db)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            task_id TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            source_file TEXT NOT NULL DEFAULT '',
+            filename TEXT NOT NULL DEFAULT '',
+            label TEXT NOT NULL DEFAULT '',
+            labels_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            result_csv TEXT NOT NULL DEFAULT '',
+            session_id TEXT NOT NULL DEFAULT '',
+            buf_done_zip TEXT NOT NULL DEFAULT '',
+            adb_serial TEXT NOT NULL DEFAULT '',
+            hotfix_has_files TEXT NOT NULL DEFAULT '',
+            hotfix_pull_source TEXT NOT NULL DEFAULT '',
+            screen_reached TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL DEFAULT '',
+            im_delivered_at TEXT NOT NULL DEFAULT '',
+            im_chat_id TEXT NOT NULL DEFAULT '',
+            im_sender_id TEXT NOT NULL DEFAULT '',
+            im_deliver_error TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO tasks(task_id,url,filename,status,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?)",
+        ("t-old", "https://x/a.apk", "a.apk", "failed", "t1", "2026-01-01T00:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO tasks(task_id,url,filename,status,created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?)",
+        ("t-new", "https://x/a.apk", "a.apk", "success", "t2", "2026-02-01T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    task_store._conn = None
+    task_store.open_store()
+    assert task_store.get_task("t-old") is None
+    kept = task_store.get_task("t-new")
+    assert kept is not None and kept.status == "success"
+    assert task_store.get_task_by_filename("a.apk").task_id == "t-new"
+
+
 def test_ops_commands_parse():
     # Prefer im-module ops_commands
     if str(_A_SRC) in sys.path:
@@ -343,6 +515,8 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert sheet_rows[0] == (
         "filename",
         "label",
+        "status",
+        "error",
         "updated_at",
         "finished_at",
     )
@@ -350,8 +524,10 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert any(r[0] == "a.apk" and r[1] == "Game" for r in body)
     assert not any(r[0] == "a.apk" and r[1] == "GameOld" for r in body)
     a_row = next(r for r in body if r[0] == "a.apk")
-    assert a_row[2] == "2026-08-04: 20:01"
-    assert a_row[3] == "2026-08-04: 20:01"
+    assert a_row[2] == "success"
+    assert a_row[3] in ("", None)
+    assert a_row[4] == "2026-08-04: 20:01"
+    assert a_row[5] == "2026-08-04: 20:01"
 
     success_only = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_table", arg="success")

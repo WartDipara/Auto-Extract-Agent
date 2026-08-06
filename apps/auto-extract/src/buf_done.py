@@ -85,7 +85,12 @@ def _mark_pack_failed(task_id: str, primary: Path, exc: BaseException) -> None:
                 err,
             )
             return
-        queue_manager.update_task(task_id, status="failed", error=err)
+        queue_manager.update_task(
+            task_id,
+            status="failed",
+            error=err,
+            expected_run_gen=int(task.run_gen or 0),
+        )
         _log.error("task_id=%s %s", task_id, err)
     except Exception:
         _log.exception("task_id=%s failed to record buf_done error", task_id)

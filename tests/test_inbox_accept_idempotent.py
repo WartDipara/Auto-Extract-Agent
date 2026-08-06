@@ -74,7 +74,7 @@ def test_dispatch_rejects_unknown_and_empty_urls(tmp_path, monkeypatch):
         is True
     )
 
-    # Different inbox filename, same URL while still active → no second task.
+    # Different inbox filename, same APK URL → overwrite same task_id (run_gen++).
     src3 = tmp_path / "im_dup.json"
     assert (
         router.dispatch(
@@ -91,11 +91,15 @@ def test_dispatch_rejects_unknown_and_empty_urls(tmp_path, monkeypatch):
     import sqlite3
 
     conn = sqlite3.connect(str(tmp_path / "tasks.db"))
-    n = conn.execute(
-        "SELECT COUNT(*) FROM tasks WHERE url=?", ("https://a.apk",)
-    ).fetchone()[0]
+    rows = conn.execute(
+        "SELECT task_id, run_gen, source_file, status FROM tasks WHERE url=?",
+        ("https://a.apk",),
+    ).fetchall()
     conn.close()
-    assert n == 1
+    assert len(rows) == 1
+    assert rows[0][1] == 1
+    assert rows[0][2] == "im_dup.json"
+    assert rows[0][3] == "queued"
 
 
 def test_watcher_moves_rejected_prefix(tmp_path, monkeypatch):

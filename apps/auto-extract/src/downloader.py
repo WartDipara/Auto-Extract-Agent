@@ -28,6 +28,10 @@ def _filename_from_url(url: str) -> str:
     return name
 
 
+def filename_from_url(url: str) -> str:
+    """Public helper: URL path basename used as ledger overwrite key."""
+    return _filename_from_url(url)
+
 def _lock_for(filename: str) -> threading.Lock:
     with _LOCKS_GUARD:
         lock = _FILE_LOCKS.get(filename)

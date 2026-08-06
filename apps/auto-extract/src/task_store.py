@@ -79,7 +79,8 @@ def open_store() -> None:
                 im_delivered_at TEXT NOT NULL DEFAULT '',
                 im_chat_id TEXT NOT NULL DEFAULT '',
                 im_sender_id TEXT NOT NULL DEFAULT '',
-                im_deliver_error TEXT NOT NULL DEFAULT ''
+                im_deliver_error TEXT NOT NULL DEFAULT '',
+                run_gen INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_{table}_status ON {table}(status);
             CREATE INDEX IF NOT EXISTS idx_{table}_updated ON {table}(updated_at);
@@ -128,6 +129,44 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             f"ALTER TABLE {table} ADD COLUMN screen_reached TEXT NOT NULL DEFAULT ''"
         )
+    if "run_gen" not in cols:
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN run_gen INTEGER NOT NULL DEFAULT 0"
+        )
+    _dedupe_filenames(conn)
+    conn.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_filename_unique "
+        f"ON {table}(filename) WHERE TRIM(filename) != ''"
+    )
+
+
+def _dedupe_filenames(conn: sqlite3.Connection) -> None:
+    """Keep newest updated_at per non-empty filename; drop older duplicates."""
+    table = _table()
+    rows = conn.execute(
+        f"SELECT task_id, filename, updated_at FROM {table} "
+        "WHERE TRIM(COALESCE(filename,'')) != '' "
+        "ORDER BY updated_at DESC, task_id DESC"
+    ).fetchall()
+    seen: set[str] = set()
+    drop: list[str] = []
+    for row in rows:
+        name = str(row["filename"] or "").strip()
+        if not name:
+            continue
+        if name in seen:
+            drop.append(str(row["task_id"]))
+        else:
+            seen.add(name)
+    if not drop:
+        return
+    placeholders = ",".join("?" * len(drop))
+    conn.execute(
+        f"DELETE FROM {table} WHERE task_id IN ({placeholders})", drop
+    )
+    _log.warning(
+        "task_store deduped filename collisions removed=%s", len(drop)
+    )
 
 
 def _require_conn() -> sqlite3.Connection:
@@ -169,6 +208,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         im_chat_id=_row_get(row, "im_chat_id"),
         im_sender_id=_row_get(row, "im_sender_id"),
         im_deliver_error=_row_get(row, "im_deliver_error"),
+        run_gen=_row_get_int(row, "run_gen"),
     )
 
 
@@ -177,6 +217,13 @@ def _row_get(row: sqlite3.Row, key: str) -> str:
         return row[key] or ""
     except (KeyError, IndexError):
         return ""
+
+
+def _row_get_int(row: sqlite3.Row, key: str) -> int:
+    try:
+        return int(row[key] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return 0
 
 
 def get_next_seq() -> int:
@@ -223,8 +270,8 @@ def insert_task(task: Task) -> Task:
                     status, error, result_csv, session_id, buf_done_zip, adb_serial,
                     hotfix_has_files, hotfix_pull_source, screen_reached,
                     created_at, updated_at, finished_at, im_delivered_at, im_chat_id,
-                    im_sender_id, im_deliver_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    im_sender_id, im_deliver_error, run_gen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.task_id,
@@ -249,6 +296,7 @@ def insert_task(task: Task) -> Task:
                     task.im_chat_id or "",
                     task.im_sender_id or "",
                     task.im_deliver_error or "",
+                    int(task.run_gen or 0),
                 ),
             )
             conn.commit()
@@ -258,7 +306,12 @@ def insert_task(task: Task) -> Task:
     return task
 
 
-def update_task(task_id: str, **fields: Any) -> Task | None:
+def update_task(
+    task_id: str,
+    *,
+    expected_run_gen: int | None = None,
+    **fields: Any,
+) -> Task | None:
     allowed = {
         "url",
         "source_file",
@@ -279,9 +332,10 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
         "im_chat_id",
         "im_sender_id",
         "im_deliver_error",
+        "run_gen",
     }
     patch = {k: v for k, v in fields.items() if k in allowed}
-    if not patch:
+    if not patch and expected_run_gen is None:
         return get_task(task_id)
 
     table = _table()
@@ -296,14 +350,30 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                 conn.rollback()
                 return None
             task = _row_to_task(row)
+            if (
+                expected_run_gen is not None
+                and int(task.run_gen or 0) != int(expected_run_gen)
+            ):
+                conn.rollback()
+                _log.info(
+                    "update_task stale task_id=%s expected_gen=%s actual_gen=%s",
+                    task_id,
+                    expected_run_gen,
+                    task.run_gen,
+                )
+                return None
             for key, value in patch.items():
                 if key == "labels":
                     task.labels = value if isinstance(value, dict) else {}
+                elif key == "run_gen":
+                    task.run_gen = int(value or 0)
                 else:
                     setattr(task, key, value)
             now = utc_now()
             task.updated_at = now
-            if task.status in TERMINAL_STATUSES and not task.finished_at:
+            if "finished_at" in patch:
+                task.finished_at = str(patch.get("finished_at") or "")
+            elif task.status in TERMINAL_STATUSES and not task.finished_at:
                 task.finished_at = now
             conn.execute(
                 f"""
@@ -312,7 +382,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     status=?, error=?, result_csv=?, session_id=?, buf_done_zip=?,
                     adb_serial=?, hotfix_has_files=?, hotfix_pull_source=?,
                     screen_reached=?, updated_at=?, finished_at=?, im_delivered_at=?,
-                    im_chat_id=?, im_sender_id=?, im_deliver_error=?
+                    im_chat_id=?, im_sender_id=?, im_deliver_error=?, run_gen=?
                 WHERE task_id=?
                 """,
                 (
@@ -336,6 +406,7 @@ def update_task(task_id: str, **fields: Any) -> Task | None:
                     task.im_chat_id or "",
                     task.im_sender_id or "",
                     task.im_deliver_error or "",
+                    int(task.run_gen or 0),
                     task.task_id,
                 ),
             )
@@ -352,6 +423,21 @@ def get_task(task_id: str) -> Task | None:
         conn = _require_conn()
         row = conn.execute(
             f"SELECT * FROM {table} WHERE task_id=?", (task_id,)
+        ).fetchone()
+        return _row_to_task(row) if row else None
+
+
+def get_task_by_filename(filename: str) -> Task | None:
+    name = (filename or "").strip()
+    if not name:
+        return None
+    table = _table()
+    with _lock:
+        conn = _require_conn()
+        row = conn.execute(
+            f"SELECT * FROM {table} WHERE filename=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (name,),
         ).fetchone()
         return _row_to_task(row) if row else None
 
