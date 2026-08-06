@@ -129,7 +129,7 @@ def test_missing_chat_abandoned(tmp_path, monkeypatch):
 
 def test_zip_missing_after_wait_abandoned(tmp_path, monkeypatch):
     _config, courier_mod, db, audit = _load_courier(tmp_path, monkeypatch)
-    missing = tmp_path / "nope.bin"
+    missing = tmp_path / "nope.zip"
     _seed_task(db, buf_done_zip=str(missing))
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
@@ -144,7 +144,7 @@ def test_zip_missing_after_wait_abandoned(tmp_path, monkeypatch):
 
 def test_file_send_max_attempts_abandoned(tmp_path, monkeypatch):
     _config, courier_mod, db, _audit = _load_courier(tmp_path, monkeypatch)
-    z = tmp_path / "a.bin"
+    z = tmp_path / "a.zip"
     z.write_bytes(b"x")
     _seed_task(db, buf_done_zip=str(z))
     ch = _FakeChannel()
@@ -165,7 +165,7 @@ def test_file_send_max_attempts_abandoned(tmp_path, monkeypatch):
 
 def test_file_sent_mark_fail_does_not_resend(tmp_path, monkeypatch):
     _config, courier_mod, db, _audit = _load_courier(tmp_path, monkeypatch)
-    z = tmp_path / "a.bin"
+    z = tmp_path / "a.zip"
     z.write_bytes(b"x")
     _seed_task(db, buf_done_zip=str(z))
     ch = _FakeChannel()
@@ -182,7 +182,7 @@ def test_file_sent_mark_fail_does_not_resend(tmp_path, monkeypatch):
 
     monkeypatch.setattr(courier_mod, "_mark_delivered", _flaky_mark)
     c._tick()
-    assert ch.files == ["a.bin"]
+    assert ch.files == ["a.zip"]
     row = sqlite3.connect(str(db)).execute(
         "SELECT im_delivered_at FROM tasks WHERE task_id='t-1'"
     ).fetchone()
@@ -190,7 +190,7 @@ def test_file_sent_mark_fail_does_not_resend(tmp_path, monkeypatch):
     assert "t-1" in c._file_sent_ok
 
     c._tick()
-    assert ch.files == ["a.bin"]  # no second send
+    assert ch.files == ["a.zip"]  # no second send
     row = sqlite3.connect(str(db)).execute(
         "SELECT im_delivered_at FROM tasks WHERE task_id='t-1'"
     ).fetchone()
@@ -199,7 +199,7 @@ def test_file_sent_mark_fail_does_not_resend(tmp_path, monkeypatch):
 
 def test_non_retryable_file_error_abandons_immediately(tmp_path, monkeypatch):
     _config, courier_mod, db, _audit = _load_courier(tmp_path, monkeypatch)
-    z = tmp_path / "a.bin"
+    z = tmp_path / "a.zip"
     z.write_bytes(b"x")
     _seed_task(db, buf_done_zip=str(z))
     ch = _FakeChannel()

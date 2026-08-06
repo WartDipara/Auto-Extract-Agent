@@ -42,7 +42,7 @@ OPENCODE_SLOTS = 1
 DEVICE_WAIT_TIMEOUT_SEC = 3600.0
 OPENCODE_WAIT_TIMEOUT_SEC = 7200.0
 
-# Required for buf_done encrypted pack; set in apps/auto-extract/.env
+# Required for encrypted result .zip pack; set in apps/auto-extract/.env
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
 
 DEBUG_KEYSTORE = STATE_DIR / "debug.keystore"

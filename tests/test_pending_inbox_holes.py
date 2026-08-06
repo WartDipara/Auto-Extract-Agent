@@ -131,7 +131,7 @@ def test_zip_timeout_keeps_undelivered(tmp_path, monkeypatch):
         )
         """
     )
-    missing = tmp_path / "nope.bin"
+    missing = tmp_path / "nope.zip"
     conn.execute(
         "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (

@@ -279,13 +279,14 @@ def _warn_unowned_artifacts(
 
     buf_dir = Path(spec.buf_done_dir)
     if buf_dir.is_dir():
-        for path in buf_dir.glob("*.bin"):
-            if path.resolve() not in known_bins:
-                _log.warning(
-                    "unowned buf_done (not deleted): %s module=%s",
-                    path,
-                    spec.module_id,
-                )
+        for pattern in ("*.zip", "*.bin"):
+            for path in buf_dir.glob(pattern):
+                if path.resolve() not in known_bins:
+                    _log.warning(
+                        "unowned buf_done (not deleted): %s module=%s",
+                        path,
+                        spec.module_id,
+                    )
 
     result_dir = Path(spec.result_dir)
     if result_dir.is_dir():

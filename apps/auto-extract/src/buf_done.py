@@ -48,7 +48,7 @@ def pack_result_zip(primary_csv: Path, *, out_dir: Path | None = None) -> Path:
         raise FileNotFoundError(primary)
     dest_dir = Path(out_dir) if out_dir is not None else config.BUF_DONE_DIR
     dest_dir.mkdir(parents=True, exist_ok=True)
-    out_path = dest_dir / f"{primary.stem}.bin"
+    out_path = dest_dir / f"{primary.stem}.zip"
     members = collect_result_csvs(primary)
     password = _zip_password()
     with pyzipper.AESZipFile(
@@ -61,7 +61,7 @@ def pack_result_zip(primary_csv: Path, *, out_dir: Path | None = None) -> Path:
         for path in members:
             zf.write(path, arcname=path.name)
     _log.info(
-        "buf_done bin: %s members=%s",
+        "buf_done zip: %s members=%s",
         out_path,
         [p.name for p in members],
     )

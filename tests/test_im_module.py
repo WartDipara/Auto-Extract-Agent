@@ -119,8 +119,8 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
 
     buf = tmp_path / "buf_done"
     buf.mkdir()
-    (buf / "a.bin").write_bytes(b"a")
-    (buf / "b.bin").write_bytes(b"b")
+    (buf / "a.zip").write_bytes(b"a")
+    (buf / "b.zip").write_bytes(b"b")
     db = tmp_path / "tasks.db"
     monkeypatch.setattr(config, "TASKS_DB", db)
     monkeypatch.setattr(config, "ZIP_WAIT_SEC", 600)
@@ -172,7 +172,7 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "",
                 "",
-                str(buf / "a.bin"),
+                str(buf / "a.zip"),
                 "im_1000_1.json",
                 "",
                 "t0",
@@ -185,8 +185,8 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     )
     c._tick()
     assert _delivered("t-1")
-    assert ch.files == [(chat, "a.bin")]
-    assert any(chat == cid and "a.bin" in text for cid, text in ch.texts)
+    assert ch.files == [(chat, "a.zip")]
+    assert any(chat == cid and "a.zip" in text for cid, text in ch.texts)
 
     # Simulate IM restart: new Courier, no memory; second task still undelivered.
     ch2 = _FakeChannel()
@@ -202,7 +202,7 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "",
                 "",
-                str(buf / "a.bin"),
+                str(buf / "a.zip"),
                 "im_1000_1.json",
                 "",
                 "t0",
@@ -220,7 +220,7 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
                 "",
                 "",
                 "",
-                str(buf / "b.bin"),
+                str(buf / "b.zip"),
                 "im_1000_1.json",
                 "",
                 "t0",
@@ -233,9 +233,9 @@ def test_courier_delivers_each_finished_task(tmp_path, monkeypatch):
     )
     c2._tick()
     assert _delivered("t-2")
-    assert ch2.files == [(chat, "b.bin")]
+    assert ch2.files == [(chat, "b.zip")]
     c2._tick()
-    assert ch2.files == [(chat, "b.bin")]
+    assert ch2.files == [(chat, "b.zip")]
 
 
 def test_enqueue_writes_im_chat_id(tmp_path, monkeypatch):
@@ -423,7 +423,7 @@ def test_queue_manager_snapshot(tmp_path, monkeypatch):
     snap = json.loads(config.QUEUE_STATUS_FILE.read_text(encoding="utf-8"))
     assert snap["active"] == []
     assert snap["recent_done"][0]["status"] == "success"
-    assert snap["recent_done"][0]["buf_done_zip"].endswith("stem_label.bin")
+    assert snap["recent_done"][0]["buf_done_zip"].endswith("stem_label.zip")
 
 
 def test_courier_core_health_edge_announce(tmp_path, monkeypatch):
@@ -762,7 +762,7 @@ def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):
 
     buf = tmp_path / "buf"
     buf.mkdir()
-    (buf / "a.bin").write_bytes(b"a")
+    (buf / "a.zip").write_bytes(b"a")
     db = tmp_path / "tasks.db"
     audit = tmp_path / "delivery_audit.jsonl"
     monkeypatch.setattr(config, "TASKS_DB", db)
@@ -794,7 +794,7 @@ def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):
             "",
             "",
             "",
-            str(buf / "a.bin"),
+            str(buf / "a.zip"),
             "",
             "",
             "t0",
@@ -812,7 +812,7 @@ def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):
     ch = _FakeChannel()
     c = courier_mod.Courier(ch)
     c._tick()
-    assert ch.files == [(chat, "a.bin")]
+    assert ch.files == [(chat, "a.zip")]
     conn = sqlite3.connect(str(db))
     row = conn.execute(
         "SELECT im_delivered_at, im_deliver_error FROM tasks WHERE task_id=?",
@@ -822,5 +822,5 @@ def test_deliver_file_ok_text_fail_marks_delivered_once(tmp_path, monkeypatch):
     assert row[0]
     assert "text boom" in (row[1] or "")
     c._tick()
-    assert ch.files == [(chat, "a.bin")]
+    assert ch.files == [(chat, "a.zip")]
     assert "file_ok_text_failed" in audit.read_text(encoding="utf-8")

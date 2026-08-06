@@ -286,6 +286,11 @@ class DingTalkChannel:
             )
             raise
 
+    def outgoing_file_name(self, path: Path) -> str:
+        # Legacy .bin packs still map to zip upload type for DingTalk.
+        name, _ = resolve_send_file_meta(path)
+        return name
+
     def _remember_session_reply(
         self,
         chat_id: str,

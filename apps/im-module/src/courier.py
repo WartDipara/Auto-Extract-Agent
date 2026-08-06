@@ -58,6 +58,16 @@ def _user_task_card(title: str, *, label: str, task_id: str, extra: list[str] | 
     return "\n".join(lines)
 
 
+def _outgoing_file_name(channel, path: Path) -> str:
+    fn = getattr(channel, "outgoing_file_name", None)
+    if callable(fn):
+        try:
+            return str(fn(path) or Path(path).name)
+        except Exception:
+            _log.exception("outgoing_file_name failed path=%s", path)
+    return Path(path).name
+
+
 def _non_retryable_deliver_error(exc: BaseException | str) -> bool:
     text = str(exc or "").lower()
     keys = (
@@ -653,6 +663,7 @@ class Courier:
             zip_path = Path(str(done.get("buf_done_zip") or ""))
             if task_id in self._file_sent_ok:
                 # File already sent earlier; only retry mark / text.
+                sent_name = _outgoing_file_name(self._channel, zip_path)
                 try:
                     self._channel.reply_text(
                         chat_id,
@@ -661,7 +672,7 @@ class Courier:
                             label=label,
                             task_id=task_id,
                             extra=[
-                                f"文件：{zip_path.name or '-'}",
+                                f"文件：{sent_name or '-'}",
                                 "解压密码可用 query password 查询。",
                             ],
                         ),
@@ -701,7 +712,7 @@ class Courier:
                         self._channel.reply_text(
                             chat_id,
                             _user_task_card(
-                                "处理已完成，但结果包未能生成，已停止回传",
+                                "处理已完成，但结果 zip 未能生成，已停止回传",
                                 label=label,
                                 task_id=task_id,
                             ),
@@ -781,6 +792,7 @@ class Courier:
 
             text_err = ""
             try:
+                sent_name = _outgoing_file_name(self._channel, zip_path)
                 self._channel.reply_text(
                     chat_id,
                     _user_task_card(
@@ -788,7 +800,7 @@ class Courier:
                         label=label,
                         task_id=task_id,
                         extra=[
-                            f"文件：{zip_path.name}",
+                            f"文件：{sent_name}",
                             "解压密码可用 query password 查询。",
                         ],
                     ),

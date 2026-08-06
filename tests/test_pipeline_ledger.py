@@ -237,7 +237,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "",
             "",
             "ses-1",
-            str(tmp_path / "a.bin"),
+            str(tmp_path / "a.zip"),
             "im_1.json",
             "emulator-5554",
             "2026-08-04T12:01:00Z",
@@ -247,7 +247,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
             "group:cid-a",
         ),
     )
-    (tmp_path / "a.bin").write_bytes(b"x")
+    (tmp_path / "a.zip").write_bytes(b"x")
     conn.execute(
         "INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
@@ -305,7 +305,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         ops_commands.OpsCommand(kind="query_password")
     )
     assert pw.ok and pw.message == (
-        "解压密码：gametool999\n说明：将 .bin 按 zip 解压即可。"
+        "解压密码：gametool999\n说明：群内回传的是加密 .zip，用解压工具输入密码即可。"
     )
 
     prog = task_ledger_query.run_ledger_query(
@@ -321,7 +321,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert gid.ok and "2026-08-04 20:01:00" in gid.message
     assert "任务号：t-0001" in gid.message
     assert "群回传：2026-08-04 20:05:00" in gid.message
-    assert "结果包：已生成" in gid.message
+    assert "结果 zip：已生成" in gid.message
     assert "session" not in gid.message
     assert "adb" not in gid.message
     assert "emulator-5554" not in gid.message

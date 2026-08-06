@@ -50,18 +50,20 @@ Legacy chat JSON / markdown code-fence JSON in that shape is still accepted.
 ### Ack
 
 ```text
-已入队：im_<request_id>.json
-urls=<N>
+已登记，共 N 条链接
+处理完成后结果将发回本群。
 ```
+
+（处理服务暂不可用时，会在登记回复中附带恢复说明。）
 
 ### Per-task delivery when finished
 
 
 | Result | Delivery |
 | ------ | -------- |
-| `success` | Result file + text note (DingTalk sends `.bin` as `.zip`) |
-| Failure terminal | Text: `任务结束：<label>` + `status` + `error` |
-| Success but file missing too long | Timeout text (default ~10 min) |
+| `success` | 加密 `.zip` + 文字说明（含任务号、文件名；密码用 `query password`） |
+| Failure terminal | 文字：游戏名、任务号、状态、原因 |
+| Success but zip missing too long | 超时文字（默认约 10 分钟后停止回传） |
 
 
 Ledger statuses: section 4. Pipeline runs inside Module A.
@@ -75,7 +77,7 @@ Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** w
 Excel export is a **separate** command: `export table` (section 4).
 
 Text columns for list/progress: game name · task id · status (+ short reason on failures).
-Detail cards (`query gid` / `query label`) are user-facing: game name, task id, status, update time, whether result pack exists, whether group delivery happened; optional failure / delivery notes. No session/adb/hotfix.
+Detail cards (`query gid` / `query label`) are user-facing: game name, task id, status, update time, whether result `.zip` exists, whether group delivery happened; optional failure / delivery notes. No session/adb/hotfix.
 
 List headers look like `【我的进行中任务】（共 N 条）` / `【全部进行中任务】` / `【状态：success】`.
 
@@ -120,7 +122,7 @@ List headers look like `【我的进行中任务】（共 N 条）` / `【全部
 任务号：t-0002
 状态：success
 更新：2026-08-06 11:18:07
-结果包：已生成
+结果 zip：已生成
 群回传：2026-08-06 11:20:00
 ```
 
@@ -140,8 +142,8 @@ Optional lines: `原因：…` (task error), `回传说明：…` (delivery note
 @bot query password
 ```
 
-- Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (buf_done `.bin` pack password).
-- Reply example: `解压密码：…`
+- Reads `ZIP_PASSWORD` from `apps/auto-extract/.env` (password for the encrypted result `.zip`).
+- Reply example: `解压密码：…` + 说明群内回传的是加密 `.zip`。
 
 ### 3.7 Help
 

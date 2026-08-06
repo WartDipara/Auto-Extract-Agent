@@ -229,6 +229,9 @@ class FeishuChannel:
             _log.error("send_file failed code=%s msg=%s", msg_resp.code, msg_resp.msg)
             raise RuntimeError(f"feishu send_file failed: {msg_resp.msg}")
 
+    def outgoing_file_name(self, path: Path) -> str:
+        return Path(path).name
+
 
 def _parse_receive(data: lark.im.v1.P2ImMessageReceiveV1) -> tuple[str, str | None]:
     event = data.event

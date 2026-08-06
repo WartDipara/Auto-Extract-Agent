@@ -37,14 +37,14 @@ def test_pack_testzip_csv_with_env_password(tmp_path, monkeypatch):
     # Keep source under tmp so fixture file is untouched; copy bytes.
     primary = tmp_path / _CSV.name
     primary.write_bytes(_CSV.read_bytes())
-    bin_path = pack_result_zip(primary, out_dir=tmp_path / "buf_done")
-    assert bin_path == tmp_path / "buf_done" / "testzip.bin"
+    zip_path = pack_result_zip(primary, out_dir=tmp_path / "buf_done")
+    assert zip_path == tmp_path / "buf_done" / "testzip.zip"
 
-    with pyzipper.AESZipFile(bin_path, "r") as zf:
+    with pyzipper.AESZipFile(zip_path, "r") as zf:
         zf.setpassword(password)
         assert zf.read(_CSV.name) == _CSV.read_bytes()
 
-    with pyzipper.AESZipFile(bin_path, "r") as zf:
+    with pyzipper.AESZipFile(zip_path, "r") as zf:
         zf.setpassword(b"wrong-password")
         try:
             zf.read(_CSV.name)

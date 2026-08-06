@@ -182,15 +182,15 @@ def _format_task_detail(rows: list[sqlite3.Row]) -> str:
         task_id = str(row["task_id"] or "-")
         status = str(row["status"] or "-")
         when = to_shanghai(str(row["updated_at"] or ""))
-        bin_path = Path(str(row["buf_done_zip"] or "").strip())
-        has_bin = bin_path.is_file()
+        zip_path = Path(str(row["buf_done_zip"] or "").strip())
+        has_zip = zip_path.is_file()
         delivered = to_shanghai(str(row["im_delivered_at"] or ""))
         lines = [
             f"【{label}】",
             f"任务号：{task_id}",
             f"状态：{status}",
             f"更新：{when}",
-            f"结果包：{'已生成' if has_bin else '未生成'}",
+            f"结果 zip：{'已生成' if has_zip else '未生成'}",
             f"群回传：{delivered if delivered != '-' else '未回传'}",
         ]
         err = _clip(str(row["error"] or ""), _GID_ERROR_MAX)
@@ -401,7 +401,7 @@ def run_ledger_query(
             )
         return LedgerQueryResult(
             ok=True,
-            message=f"解压密码：{password}\n说明：将 .bin 按 zip 解压即可。",
+            message=f"解压密码：{password}\n说明：群内回传的是加密 .zip，用解压工具输入密码即可。",
         )
 
     try:

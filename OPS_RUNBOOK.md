@@ -26,8 +26,8 @@ Do not rely on an interactive PowerShell window.
 - Shared ledger file: `apps/auto-extract/state/tasks.db` (one file; **one table per product module**).
 - get-texts table: `tasks` (today the only registered module).
 - Module paths / table names: `shared/module_registry.py`.
-- Chat: `@Lino query progress` / `query status …` / `query gid <id>`
-- `query gid` shows delivered time, whether `.bin` exists, session, adb.
+- Chat: `@bot query progress` / `query status …` / `query gid <id>` / `query label <name>`
+- `query gid` / `query label` show status, update time, whether result `.zip` exists, delivery time.
 - Secrets / channel keys: `apps/auto-extract/.env`, `apps/im-module/.env` only.
 
 ## Common failures
@@ -35,6 +35,6 @@ Do not rely on an interactive PowerShell window.
 | Symptom | Check |
 | ------- | ----- |
 | IM says core down | Core process + heartbeat file age |
-| Success but no file in chat | `query gid` → `buf_done` / `delivered`; IM log; `.bin` under `apps/auto-extract/buf_done/` |
+| Success but no file in chat | `query gid` → `buf_done` / `delivered`; IM log; `.zip` under `apps/auto-extract/buf_done/` |
 | Status flipped to failed after success | error `[BUF_DONE_PACK@archive]` → pack password / disk |
 | Disk filling | GC running? undelivered tasks block reclaim until IM delivers |

@@ -170,9 +170,9 @@ def _touch_trio(env, task_id: str, stem: str = "pack") -> dict[str, Path]:
     csv.write_text("hello\n", encoding="utf-8")
     trad = env["result"] / f"{stem}_game_T.csv"
     trad.write_text("hello_t\n", encoding="utf-8")
-    bin_path = env["buf"] / f"{stem}_game.bin"
-    bin_path.write_bytes(b"PK\x03\x04")
-    return {"workspace": ws, "csv": csv, "trad": trad, "bin": bin_path}
+    zip_path = env["buf"] / f"{stem}_game.zip"
+    zip_path.write_bytes(b"PK\x03\x04")
+    return {"workspace": ws, "csv": csv, "trad": trad, "zip": zip_path}
 
 
 def test_eligibility_awaiting_im(gc_env):
@@ -257,7 +257,7 @@ def test_sweep_deletes_trio_when_delivered_aged(gc_env):
         im_delivered_at=old,
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
         filename="a.apk",
     )
 
@@ -268,13 +268,13 @@ def test_sweep_deletes_trio_when_delivered_aged(gc_env):
     assert not paths["workspace"].exists()
     assert not paths["csv"].exists()
     assert not paths["trad"].exists()
-    assert not paths["bin"].exists()
+    assert not paths["zip"].exists()
 
 
 def test_missing_member_still_deletes_others(gc_env):
     env = gc_env
     paths = _touch_trio(env, "t-partial")
-    paths["bin"].unlink()  # b gone
+    paths["zip"].unlink()  # b gone
     now = time.time()
     old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 8 * 86400))
     _insert(
@@ -285,7 +285,7 @@ def test_missing_member_still_deletes_others(gc_env):
         im_delivered_at=old,
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
     )
 
     from main import run_once
@@ -308,7 +308,7 @@ def test_undelivered_with_chat_not_deleted(gc_env):
         im_delivered_at="",
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
     )
 
     from main import run_once
@@ -316,7 +316,7 @@ def test_undelivered_with_chat_not_deleted(gc_env):
     run_once(dry_run=False)
     assert paths["workspace"].exists()
     assert paths["csv"].exists()
-    assert paths["bin"].exists()
+    assert paths["zip"].exists()
 
 
 def test_recheck_drops_if_delivery_cleared(gc_env):
@@ -332,7 +332,7 @@ def test_recheck_drops_if_delivery_cleared(gc_env):
         im_delivered_at=old,
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
     )
 
     from collector import collect_candidates
@@ -367,7 +367,7 @@ def test_permission_error_soft_fail(gc_env):
         im_delivered_at=old,
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
     )
 
     from sweeper import sweep_group
@@ -381,7 +381,7 @@ def test_permission_error_soft_fail(gc_env):
     real_unlink = Path.unlink
 
     def flaky_unlink(self, *args, **kwargs):
-        if self == paths["bin"]:
+        if self == paths["zip"]:
             raise PermissionError("locked")
         return real_unlink(self, *args, **kwargs)
 
@@ -389,10 +389,10 @@ def test_permission_error_soft_fail(gc_env):
         results = sweep_group(group, dry_run=False)
 
     statuses = {r["path"]: r["status"] for r in results}
-    assert statuses[str(paths["bin"])] == "skipped"
+    assert statuses[str(paths["zip"])] == "skipped"
     # workspace uses rmtree — still deleted; csv deleted
     assert not paths["csv"].exists()
-    assert paths["bin"].exists()
+    assert paths["zip"].exists()
 
 
 def test_active_with_stop_not_deleted(gc_env):
@@ -448,7 +448,7 @@ def test_dry_run_keeps_files(gc_env):
         im_delivered_at=old,
         finished_at=old,
         result_csv=str(paths["csv"]),
-        buf_done_zip=str(paths["bin"]),
+        buf_done_zip=str(paths["zip"]),
     )
 
     from main import run_once
@@ -456,5 +456,5 @@ def test_dry_run_keeps_files(gc_env):
     summary = run_once(dry_run=True)
     assert summary["passed"] >= 1
     assert paths["workspace"].exists()
-    assert paths["bin"].exists()
+    assert paths["zip"].exists()
     assert all(r["status"] == "dry_run" for r in summary["results"] if r["task_id"] == "t-dry")
