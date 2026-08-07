@@ -122,19 +122,28 @@ def run_device_stage(
         dispatch_device(adb).install_apk(
             adb, signed_apk, package_name=package_name
         )
-    except TaskError:
-        raise
     except Exception as exc:
-        raise TaskError(
-            code="PREP_INSTALL",
-            message=str(exc) or "apk install failed",
-            details={
-                "package": package_name,
-                "serial": adb.serial,
-                "handler": adb.device_handler.name,
-            },
-            cause=exc,
-        ) from exc
+        # Install is optional for extract: decoded/ already exists from patch.
+        # Missing hotfix must not fail the task.
+        _log.warning(
+            "install failed; continue extract without hotfix package=%s: %s",
+            package_name,
+            exc,
+        )
+        stage(f"install failed; skip hotfix, continue with decoded only: {exc}")
+        layout["hotfix"].mkdir(parents=True, exist_ok=True)
+        return PrepResult(
+            package_name=package_name,
+            apk_stem=stem,
+            original_apk=apk_path,
+            signed_apk=signed_apk,
+            decoded_dir=layout["decoded"],
+            hotfix_dir=layout["hotfix"],
+            hotfix_has_files=False,
+            pull_source="none",
+            task_root=Path(task_root),
+            screen_reached="install_failed",
+        )
     stage("install finished")
     stage("starting game...")
     try:

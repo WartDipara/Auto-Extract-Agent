@@ -1,4 +1,4 @@
-"""Prep robustness: hotfix/OCR soft-fail; install remains hard-fail."""
+"""Prep robustness: install/hotfix/OCR soft-fail; extract continues on decoded."""
 
 from __future__ import annotations
 
@@ -49,10 +49,9 @@ def test_pull_hotfix_never_raises(tmp_path):
         hotfix_pull._try_pull_android_data = original_sd
 
 
-def test_run_device_stage_install_hard_fail(tmp_path, monkeypatch):
+def test_run_device_stage_install_soft_fail(tmp_path, monkeypatch):
     _purge()
     import prep_stages as ps
-    from errors import TaskError
 
     apk = tmp_path / "game.apk"
     apk.write_bytes(b"apk")
@@ -85,18 +84,17 @@ def test_run_device_stage_install_hard_fail(tmp_path, monkeypatch):
     pull = MagicMock()
     monkeypatch.setattr(ps, "pull_hotfix_candidates", pull)
 
-    try:
-        ps.run_device_stage(
-            task_root=tmp_path,
-            apk_path=apk,
-            signed_apk=signed,
-            package_name="pkg.demo",
-            serial="s1",
-            skip_ocr_gate=True,
-        )
-        assert False, "expected TaskError"
-    except TaskError as exc:
-        assert exc.code == "PREP_INSTALL"
+    result = ps.run_device_stage(
+        task_root=tmp_path,
+        apk_path=apk,
+        signed_apk=signed,
+        package_name="pkg.demo",
+        serial="s1",
+        skip_ocr_gate=True,
+    )
+    assert result.hotfix_has_files is False
+    assert result.pull_source == "none"
+    assert result.screen_reached == "install_failed"
     pull.assert_not_called()
 
 
