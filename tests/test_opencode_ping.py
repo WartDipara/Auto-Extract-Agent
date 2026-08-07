@@ -119,5 +119,5 @@ def test_courier_ping_replies_pong(tmp_path, monkeypatch):
     c = courier_mod.Courier(ch)
     c._online_announced = True  # skip lifecycle greet noise
     c.on_message(IncomingChat(chat_id="group:x", text="ping", sender_id="u1"))
-    assert "正在检查 OpenCode…" in ch.texts
+    assert "正在检查 OpenCode…" not in ch.texts
     assert ch.texts[-1] == "pong"

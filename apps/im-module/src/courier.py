@@ -382,9 +382,6 @@ class Courier:
             )
 
     def _handle_opencode_ping(self, chat_id: str, *, at_user_ids=None) -> None:
-        self._channel.reply_text(
-            chat_id, "正在检查 OpenCode…", at_user_ids=at_user_ids
-        )
         try:
             result = ping_opencode(
                 cmd=config.OPENCODE_CMD,
