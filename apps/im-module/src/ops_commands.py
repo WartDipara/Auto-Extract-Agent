@@ -14,6 +14,7 @@ ACTIVE_STATUSES = frozenset(_PRIMARY.active_statuses)
 _HELP_ALIASES = frozenset({"help", "?"})
 _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 _EXPORT_HEAD = re.compile(r"^export(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
+_PING_RE = re.compile(r"^ping[!！.。]*$", re.IGNORECASE)
 _GREET_RE = re.compile(
     r"^(你好|您好|哈喽|嗨|在吗|在不在|早上好|下午好|晚上好|hi|hello|hey)"
     r"[呀啊哦呢嘛]*"
@@ -36,6 +37,8 @@ def parse_ops_command(text: str) -> OpsCommand | None:
     lower = raw.lower()
     if lower in _HELP_ALIASES or lower == "query" or lower == "export":
         return OpsCommand(kind="help")
+    if _PING_RE.match(raw):
+        return OpsCommand(kind="ping")
     if _GREET_RE.match(raw):
         return OpsCommand(kind="greet")
 

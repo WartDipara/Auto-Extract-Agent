@@ -26,6 +26,7 @@ from pending_inbox import (
     mark_exhausted,
     remove_pending,
 )
+from shared.opencode_health import ping_opencode
 from task_ledger_query import run_ledger_query
 
 _log = logging.getLogger(__name__)
@@ -356,6 +357,9 @@ class Courier:
     def _handle_ops(
         self, chat_id: str, cmd, *, sender_id: str = "", at_user_ids=None
     ) -> None:
+        if cmd.kind == "ping":
+            self._handle_opencode_ping(chat_id, at_user_ids=at_user_ids)
+            return
         result = run_ledger_query(cmd, sender_id=sender_id)
         self._channel.reply_text(
             chat_id, result.message, at_user_ids=at_user_ids
@@ -376,6 +380,33 @@ class Courier:
                 "表格已生成，但发送失败，请稍后重试 export table。",
                 at_user_ids=at_user_ids,
             )
+
+    def _handle_opencode_ping(self, chat_id: str, *, at_user_ids=None) -> None:
+        self._channel.reply_text(
+            chat_id, "正在检查 OpenCode…", at_user_ids=at_user_ids
+        )
+        try:
+            result = ping_opencode(
+                cmd=config.OPENCODE_CMD,
+                cwd=Path(config.OPENCODE_PING_DIR),
+                timeout_sec=float(config.OPENCODE_PING_TIMEOUT_SEC),
+            )
+        except Exception as exc:
+            _log.exception("opencode ping crashed")
+            self._channel.reply_text(
+                chat_id,
+                f"OpenCode 检查失败：{exc}",
+                at_user_ids=at_user_ids,
+            )
+            return
+        if result.ok:
+            self._channel.reply_text(chat_id, "pong", at_user_ids=at_user_ids)
+            return
+        self._channel.reply_text(
+            chat_id,
+            f"OpenCode 异常：{result.message}",
+            at_user_ids=at_user_ids,
+        )
 
     def _enqueue_urls(
         self,

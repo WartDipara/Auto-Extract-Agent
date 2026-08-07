@@ -47,6 +47,11 @@ TASKS_TABLE = _PRIMARY.tasks_table
 INBOX_ROUTE = _PRIMARY.inbox_route
 QUERY_EXPORT_DIR = (_APP_ROOT / "state" / "query_exports").resolve()
 ZIP_PASSWORD = (os.environ.get("ZIP_PASSWORD") or "").strip()
+OPENCODE_CMD = (os.environ.get("OPENCODE_CMD") or "opencode").strip() or "opencode"
+OPENCODE_PING_TIMEOUT_SEC = float(
+    os.environ.get("OPENCODE_PING_TIMEOUT_SEC") or "90"
+)
+OPENCODE_PING_DIR = (_AUTO / "workspace" / "_im_ping").resolve()
 
 POLL_SEC = 3.0
 ZIP_WAIT_SEC = 600.0
@@ -112,6 +117,9 @@ OPS_TEMPLATE = (
     f"  @{BOT_NAME} query label 三国杀      按游戏名查询\n"
     f"  @{BOT_NAME} query password          查看 .zip 解压密码\n"
     "\n"
+    "【健康检查】\n"
+    f"  @{BOT_NAME} ping                   检查 OpenCode 是否正常（正常回 pong）\n"
+    "\n"
     "【导出】\n"
     f"  @{BOT_NAME} export table all        导出任务表（全部状态）\n"
     f"  @{BOT_NAME} export table success    导出指定状态的任务表\n"
@@ -119,7 +127,7 @@ OPS_TEMPLATE = (
     "  字段：filename / label / status / error / updated_at / finished_at\n"
     "  说明：账本按 filename 唯一；同名提交会覆盖旧记录\n"
     "\n"
-    "【帮助】help / ?    【打招呼】你好 / hi\n"
+    "【帮助】help / ?    【打招呼】你好 / hi    【检查】ping\n"
     "\n"
     "【回传说明】\n"
     "  成功：群内回传加密 .zip，内含提取文本 CSV；\n"

@@ -354,6 +354,8 @@ def test_ops_commands_parse():
     assert ops_commands.parse_ops_command("export table success").arg == "success"
     assert ops_commands.parse_ops_command("export").kind == "help"
     assert ops_commands.parse_ops_command("query password").kind == "query_password"
+    assert ops_commands.parse_ops_command("ping").kind == "ping"
+    assert ops_commands.parse_ops_command("PING!").kind == "ping"
     assert ops_commands.parse_ops_command("query label 三国").kind == "query_label"
     assert ops_commands.parse_ops_command("query label 三国").arg == "三国"
     assert ops_commands.parse_ops_command("query gid t-1").kind == "query_gid"
