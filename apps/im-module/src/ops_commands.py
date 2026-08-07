@@ -10,22 +10,19 @@ _PRIMARY = primary_module()
 LEDGER_STATUSES = frozenset(_PRIMARY.active_statuses | _PRIMARY.terminal_statuses)
 TERMINAL_STATUSES = frozenset(_PRIMARY.terminal_statuses)
 ACTIVE_STATUSES = frozenset(_PRIMARY.active_statuses)
-
-# User-facing filters (export / query status). Fine DB statuses stay internal.
 USER_STATUS_FILTERS = ("all", "running", "success", "failed")
 _FAILED_STATUSES = frozenset(
     s for s in TERMINAL_STATUSES if s != "success"
 )
 
-# Single source for user-visible status text (chat + export).
 STATUS_LABEL_ZH: dict[str, str] = {
-    "queued": "排队中",
+    "queued": "等待中",
     "downloaded": "已下载",
-    "patched": "已改包",
-    "on_device": "设备处理中",
-    "device_done": "设备完成",
-    "on_extract": "提取中",
-    "extract_done": "提取完成",
+    "patched": "重打包完成",
+    "on_device": "设备使用中",
+    "device_done": "设备使用完成",
+    "on_extract": "文本提取中",
+    "extract_done": "文本提取完成",
     "success": "成功",
     "decrypt_failed": "解密失败",
     "assets_missing": "资源缺失",
@@ -71,7 +68,6 @@ def resolve_status_filter(token: str) -> tuple[str, frozenset[str] | None] | Non
         return ("成功", frozenset({"success"}))
     if key == "failed":
         return ("失败", _FAILED_STATUSES)
-    # Legacy exact ledger status still accepted, not advertised in help.
     fine = raw.lower()
     if fine in LEDGER_STATUSES:
         return (status_label_zh(fine), frozenset({fine}))
@@ -101,7 +97,7 @@ _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 _EXPORT_HEAD = re.compile(r"^export(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 _PING_RE = re.compile(r"^ping[!！.。]*$", re.IGNORECASE)
 _GREET_RE = re.compile(
-    r"^(你好|您好|哈喽|嗨|在吗|在不在|早上好|下午好|晚上好|hi|hello|hey)"
+    r"^(你好|您好|哈喽|嗨|在吗|在不在|早上好|下午好|晚上好|hi|hello|hey|oi)"
     r"[呀啊哦呢嘛]*"
     r"[!！?？.。~～]*$",
     re.IGNORECASE,

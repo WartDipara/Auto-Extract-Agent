@@ -21,6 +21,19 @@ def _bare_model_id(model_id: str) -> str:
     return model_id
 
 
+def _normalize_openai_base_url(base_url: str) -> str:
+    """
+    LangChain/OpenAI client appends /chat/completions itself.
+    Accept either .../v1 or a mistaken .../v1/chat/completions.
+    """
+    url = (base_url or "").strip().rstrip("/")
+    for suffix in ("/chat/completions", "/completions"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
+            break
+    return url
+
+
 def build_chat_model(settings: SmallAgentSettings | None = None) -> BaseChatModel:
     cfg = settings or load_settings()
     common: dict[str, Any] = {
@@ -30,19 +43,21 @@ def build_chat_model(settings: SmallAgentSettings | None = None) -> BaseChatMode
     }
     if cfg.base_url:
         model_name = _bare_model_id(cfg.model_id)
+        base_url = _normalize_openai_base_url(cfg.base_url)
         _log.info(
             "small_agent llm openai-compatible model=%s base_url=%s",
             model_name,
-            cfg.base_url,
+            base_url,
         )
         print(
-            f"small_agent llm provider=openai-compatible model={model_name}",
+            f"small_agent llm provider=openai-compatible model={model_name} "
+            f"base_url={base_url}",
             flush=True,
         )
         return init_chat_model(
             model_name,
             model_provider="openai",
-            base_url=cfg.base_url,
+            base_url=base_url,
             **common,
         )
 

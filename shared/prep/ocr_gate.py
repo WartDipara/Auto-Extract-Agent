@@ -12,7 +12,8 @@ from .foreground_watch import ForegroundWatch
 from .gate_rules import build_ocr_hints, content_fingerprint
 from .ocr_util import ocr_image, texts_joined
 from .screen_coord import resolve_screen_coord_space
-from small_agent import UiAgentSession, ping_model
+from small_agent import UiAgentSession
+from small_agent.config import load_settings
 from small_agent.tools import FrameOutcome
 
 _log = logging.getLogger(__name__)
@@ -30,11 +31,12 @@ def wait_until_entry_screen(
     thread_id: str | None = None,
 ) -> str:
     """
-    Navigate privacy/download until login/start/server entry.
+    Navigate privacy/download until login screen (AI decides taps/done).
 
-    OCR + regex only produce advisory hints. All taps / done / wait decisions
-    are made by the LLM. Returns scene label, or crash / ai_unavailable.
-    Raises TimeoutError when budget (default 10 min) is exhausted.
+    OCR + regex only produce advisory hints. Never aborts early on a single
+    AI failure — keeps retrying until timeout. Returns scene / crash /
+    ai_unavailable (only if AI never became ready within the budget).
+    Raises TimeoutError when AI ran but login was not reached in time.
     """
     if not adb.is_package_running(package_name):
         time.sleep(2.0)
@@ -53,10 +55,10 @@ def wait_until_entry_screen(
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ui-decide")
     decide_future: Future | None = None
     session: UiAgentSession | None = None
+    ai_ready = False
     try:
         deadline = time.monotonic() + timeout_sec
         shot_dir = Path(tempfile.mkdtemp(prefix="ocr_gate_"))
-        last_fp = ""
         last_decide_at = 0.0
         llm_cooldown_until = 0.0
         note = ""
@@ -64,25 +66,38 @@ def wait_until_entry_screen(
         relaunches = 0
         relaunch_max = max(0, int(getattr(config, "PREP_GATE_RELAUNCH_MAX", 3)))
         cooldown = float(wait_cooldown_sec)
+        interval = float(agent_interval_sec)
         print(
             f"ocr gate watching (ai-decide, timeout={int(timeout_sec)}s, "
-            f"llm_interval={agent_interval_sec}s, wait_cooldown={cooldown}s)...",
+            f"llm_interval={interval}s, wait_cooldown={cooldown}s)...",
             flush=True,
         )
 
         def _ensure_session() -> UiAgentSession | None:
-            nonlocal session
+            """Create session when API_KEY exists. No hard ping abort."""
+            nonlocal session, ai_ready
             if session is not None:
+                ai_ready = True
                 return session
             try:
-                if not ping_model():
-                    return None
+                settings = load_settings()
             except Exception as exc:
-                _log.warning("ocr gate ping_model failed: %s", exc)
+                _log.warning("ocr gate load_settings failed: %s", exc)
                 return None
-            session = UiAgentSession(adb, thread_id=thread_id)
-            session.bootstrap()
-            return session
+            if not settings.api_key:
+                print("ocr gate: API_KEY missing; retry later", flush=True)
+                return None
+            try:
+                session = UiAgentSession(adb, thread_id=thread_id)
+                session.bootstrap()
+                ai_ready = True
+                print("ocr gate: AI session ready", flush=True)
+                return session
+            except Exception as exc:
+                _log.warning("ocr gate create session failed: %s", exc)
+                print(f"ocr gate: create session failed: {exc}", flush=True)
+                session = None
+                return None
 
         while time.monotonic() < deadline:
             n += 1
@@ -123,7 +138,6 @@ def wait_until_entry_screen(
                     if running:
                         watch.reset()
                         decide_future = None
-                        last_fp = ""
                         last_decide_at = 0.0
                         llm_cooldown_until = 0.0
                         if session is not None:
@@ -163,7 +177,7 @@ def wait_until_entry_screen(
                     flush=True,
                 )
                 if outcome.kind == "done":
-                    scene = outcome.scene or "entry"
+                    scene = outcome.scene or "login"
                     print(f"ocr gate hit entry: {scene}", flush=True)
                     return scene
                 if outcome.kind == "wait":
@@ -176,7 +190,10 @@ def wait_until_entry_screen(
                 time.sleep(min(poll_sec, llm_cooldown_until - now))
                 continue
 
-            wait_for = agent_interval_sec - (now - last_decide_at)
+            # Re-ask AI on interval even if OCR text is unchanged.
+            if last_decide_at > 0 and (now - last_decide_at) < interval:
+                time.sleep(min(poll_sec, interval - (now - last_decide_at)))
+                continue
 
             shot = shot_dir / f"gate_{n}.png"
             try:
@@ -193,28 +210,23 @@ def wait_until_entry_screen(
             fp = content_fingerprint(items)
             hints = build_ocr_hints(items)
             _log.info(
-                "ocr gate poll=%s text_sample=%s",
+                "ocr gate poll=%s fp=%s text_sample=%s",
                 n,
+                fp[:8],
                 blob[:240].replace("\n", " | "),
             )
             if hints:
                 print(f"ocr gate {hints} poll={n}", flush=True)
 
-            if fp == last_fp:
-                if n == 1 or n % 5 == 0:
-                    print(f"ocr gate unchanged; wait poll={n}", flush=True)
-                time.sleep(poll_sec)
-                continue
-
-            if last_decide_at > 0 and wait_for > 0:
-                time.sleep(min(wait_for, poll_sec))
-                continue
-
-            last_fp = fp
             agent = _ensure_session()
             if agent is None:
-                print("ocr gate: ai unavailable for undecided frame", flush=True)
-                return "ai_unavailable"
+                if n == 1 or n % 5 == 0:
+                    print(
+                        f"ocr gate: AI not ready; keep waiting poll={n}",
+                        flush=True,
+                    )
+                time.sleep(min(poll_sec * 2, 10.0))
+                continue
 
             note_parts = [p for p in (note, hints) if p]
             submit_note = " | ".join(note_parts)
@@ -227,9 +239,15 @@ def wait_until_entry_screen(
             )
             print(f"ocr gate decide submitted poll={n}", flush=True)
 
+        if not ai_ready:
+            print(
+                f"ocr gate: AI never available within {int(timeout_sec)}s",
+                flush=True,
+            )
+            return "ai_unavailable"
         print(f"ocr gate timeout after {timeout_sec}s", flush=True)
         raise TimeoutError(
-            f"OCR gate timeout after {timeout_sec}s; entry screen not reached"
+            f"OCR gate timeout after {timeout_sec}s; login screen not reached"
         )
     finally:
         try:
