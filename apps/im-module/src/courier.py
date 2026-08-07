@@ -17,7 +17,7 @@ from announce_chat import (
 from channels.base import Channel, IncomingChat
 from delivery_audit import append_delivery_event
 from inbox_writer import new_request_id, write_inbox_json
-from ops_commands import parse_ops_command
+from ops_commands import parse_ops_command, status_label_zh
 from parser import parse_task_message
 from pending_inbox import (
     add_pending,
@@ -979,7 +979,7 @@ class Courier:
                     label=label,
                     task_id=task_id,
                     extra=[
-                        f"状态：{st}",
+                        f"状态：{status_label_zh(st)}",
                         f"原因：{_clip_err(str(err))}",
                     ],
                 ),
@@ -1004,7 +1004,7 @@ class Courier:
                         label=label,
                         task_id=task_id,
                         extra=[
-                            f"状态：{st}",
+                            f"状态：{status_label_zh(st)}",
                             f"原因：{_clip_err(str(err))}",
                         ],
                     ),

@@ -11,10 +11,11 @@ from openpyxl import Workbook
 import config
 from ops_commands import (
     ACTIVE_STATUSES,
-    LEDGER_STATUSES,
     OpsCommand,
     TERMINAL_STATUSES,
-    is_valid_ledger_status,
+    resolve_status_filter,
+    status_label_zh,
+    user_status_help,
 )
 
 _DISPLAY_COLS = ("task_id", "label", "status", "error", "updated_at")
@@ -129,7 +130,7 @@ def _format_row_line(row: sqlite3.Row, *, with_error: bool = False) -> str:
     label = _clip(str(row["label"] or "未命名"), _LABEL_MAX)
     task_id = str(row["task_id"] or "-")
     status = str(row["status"] or "-")
-    line = f"{label} · {task_id} · {status}"
+    line = f"{label} · {task_id} · {status_label_zh(status)}"
     if with_error and _is_failure_terminal(status):
         err = _clip(str(row["error"] or ""), _LIST_ERROR_MAX)
         if err:
@@ -190,7 +191,7 @@ def _format_task_detail(rows: list[sqlite3.Row]) -> str:
         lines = [
             f"【{label}】",
             f"任务号：{task_id}",
-            f"状态：{status}",
+            f"状态：{status_label_zh(status)}",
             f"更新：{when}",
             f"结果 zip：{'已生成' if has_zip else '未生成'}",
             f"群回传：{delivered if delivered != '-' else '未回传'}",
@@ -229,6 +230,8 @@ def _write_export_table_xlsx(rows: list[sqlite3.Row]) -> Path:
             raw = row[c] if c in row.keys() else ""
             if c in time_cols:
                 values.append(to_shanghai_export(str(raw or "")))
+            elif c == "status":
+                values.append(status_label_zh(str(raw or "")))
             else:
                 values.append(raw)
         ws.append(values)
@@ -365,24 +368,36 @@ def _run_detail_query(
 
 
 def _allowed_status_hint(*, include_all: bool = False) -> str:
-    allowed = ", ".join(sorted(LEDGER_STATUSES))
-    if include_all:
-        return f"状态不正确。可用：all（全部），或 {allowed}"
-    return f"状态不正确。可用：{allowed}"
+    return f"范围不正确。可用：{user_status_help(include_all=include_all)}"
+
+
+def _status_in_clause(statuses: frozenset[str]) -> tuple[str, tuple[str, ...]]:
+    ordered = tuple(sorted(statuses))
+    placeholders = ",".join("?" * len(ordered))
+    return f"status IN ({placeholders})", ordered
 
 
 def _export_usage_message() -> str:
     return (
-        "用法：export table all | export table <状态>\n"
-        f"{_allowed_status_hint(include_all=True)}"
+        "用法：export table <范围>\n"
+        f"范围：{user_status_help(include_all=True)}"
+    )
+
+
+def _query_status_usage_message() -> str:
+    return (
+        "用法：query status <范围>\n"
+        f"范围：{user_status_help(include_all=True)}"
     )
 
 
 def _query_usage_message() -> str:
     return (
-        "用法：query mine | query progress | query status <状态> | "
+        "用法：query mine | query progress | query status <范围> | "
         "query gid <任务号> | query label <游戏名> | query password\n"
-        "导出请用：export table all | export table <状态>"
+        "导出请用：export table <范围>\n"
+        f"范围：{user_status_help(include_all=True)}\n"
+        "说明：query progress 等同 query status running"
     )
 
 
@@ -470,27 +485,44 @@ def run_ledger_query(
             )
 
         if cmd.kind == "query_status":
-            status = (cmd.arg or "").strip()
-            if not is_valid_ledger_status(status):
+            if not (cmd.arg or "").strip():
                 return LedgerQueryResult(
                     ok=False,
-                    message=_allowed_status_hint(),
+                    message=_query_status_usage_message(),
                 )
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE status=?", (status,)
-            ).fetchone()[0]
-            rows = list(
-                conn.execute(
-                    f"SELECT {display_cols} FROM {table} WHERE status=? "
-                    "ORDER BY updated_at DESC LIMIT ?",
-                    (status, _LIST_ROW_CAP),
-                ).fetchall()
-            )
+            resolved = resolve_status_filter(cmd.arg)
+            if resolved is None:
+                return LedgerQueryResult(
+                    ok=False,
+                    message=_allowed_status_hint(include_all=True),
+                )
+            label, statuses = resolved
+            if statuses is None:
+                total = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                rows = list(
+                    conn.execute(
+                        f"SELECT {display_cols} FROM {table} "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (_LIST_ROW_CAP,),
+                    ).fetchall()
+                )
+            else:
+                where, params = _status_in_clause(statuses)
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {where}", params
+                ).fetchone()[0]
+                rows = list(
+                    conn.execute(
+                        f"SELECT {display_cols} FROM {table} WHERE {where} "
+                        "ORDER BY updated_at DESC LIMIT ?",
+                        (*params, _LIST_ROW_CAP),
+                    ).fetchall()
+                )
             return LedgerQueryResult(
                 ok=True,
                 message=_format_list(
                     rows,
-                    header=f"【状态：{status}】",
+                    header=f"【{label}】",
                     total=int(total),
                 ),
                 row_count=len(rows),
@@ -528,46 +560,43 @@ def run_ledger_query(
             )
 
         if cmd.kind == "export_table":
-            scope = (cmd.arg or "").strip().lower()
+            scope = (cmd.arg or "").strip()
             if not scope:
                 return LedgerQueryResult(
                     ok=False,
                     message=_export_usage_message(),
                 )
-            if scope != "all" and not is_valid_ledger_status(scope):
+            resolved = resolve_status_filter(scope)
+            if resolved is None:
                 return LedgerQueryResult(
                     ok=False,
                     message=_allowed_status_hint(include_all=True),
                 )
-            # Over-fetch then unique by filename (latest updated_at wins).
+            label, statuses = resolved
+            # Latest-per-filename first, then apply range filter.
             fetch_cap = _EXPORT_HARD_CAP * 3
-            if scope == "all":
-                rows = list(
-                    conn.execute(
-                        f"SELECT {table_cols} FROM {table} "
-                        "WHERE TRIM(COALESCE(filename,'')) != '' "
-                        "ORDER BY updated_at DESC LIMIT ?",
-                        (fetch_cap,),
-                    ).fetchall()
-                )
-            else:
-                rows = list(
-                    conn.execute(
-                        f"SELECT {table_cols} FROM {table} "
-                        "WHERE status=? AND TRIM(COALESCE(filename,'')) != '' "
-                        "ORDER BY updated_at DESC LIMIT ?",
-                        (scope, fetch_cap),
-                    ).fetchall()
-                )
+            rows = list(
+                conn.execute(
+                    f"SELECT {table_cols} FROM {table} "
+                    "WHERE TRIM(COALESCE(filename,'')) != '' "
+                    "ORDER BY updated_at DESC LIMIT ?",
+                    (fetch_cap,),
+                ).fetchall()
+            )
             unique = _unique_by_filename(rows)
+            if statuses is not None:
+                unique = [
+                    row
+                    for row in unique
+                    if str(row["status"] or "") in statuses
+                ]
             truncated = len(unique) > _EXPORT_HARD_CAP
             if truncated:
                 unique = unique[:_EXPORT_HARD_CAP]
             path = _write_export_table_xlsx(unique)
-            scope_label = "全部" if scope == "all" else f"状态 {scope}"
             msg = (
-                f"已导出表格（{scope_label}）："
-                f"{len(unique)} 个文件（已按文件名去重）"
+                f"已导出表格（{label}）："
+                f"{len(unique)} 个文件（已按文件名取最新）"
             )
             if truncated:
                 msg += f"\n已截断至上限 {_EXPORT_HARD_CAP} 条"

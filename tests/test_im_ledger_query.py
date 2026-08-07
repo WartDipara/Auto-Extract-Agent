@@ -185,6 +185,7 @@ def test_query_gid_fuzzy_multi(tmp_path, monkeypatch):
     assert "t-3" not in result.message
     assert "回传说明：send fail" in result.message
     assert "原因：boom" in result.message
+    assert "状态：失败" in result.message
     assert "session" not in result.message
     assert "adb" not in result.message
 

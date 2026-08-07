@@ -11,6 +11,91 @@ LEDGER_STATUSES = frozenset(_PRIMARY.active_statuses | _PRIMARY.terminal_statuse
 TERMINAL_STATUSES = frozenset(_PRIMARY.terminal_statuses)
 ACTIVE_STATUSES = frozenset(_PRIMARY.active_statuses)
 
+# User-facing filters (export / query status). Fine DB statuses stay internal.
+USER_STATUS_FILTERS = ("all", "running", "success", "failed")
+_FAILED_STATUSES = frozenset(
+    s for s in TERMINAL_STATUSES if s != "success"
+)
+
+# Single source for user-visible status text (chat + export).
+STATUS_LABEL_ZH: dict[str, str] = {
+    "queued": "排队中",
+    "downloaded": "已下载",
+    "patched": "已改包",
+    "on_device": "设备处理中",
+    "device_done": "设备完成",
+    "on_extract": "提取中",
+    "extract_done": "提取完成",
+    "success": "成功",
+    "decrypt_failed": "解密失败",
+    "assets_missing": "资源缺失",
+    "abnormal_exit": "异常退出",
+    "failed": "失败",
+    "timeout": "超时",
+}
+
+_FILTER_ALIASES: dict[str, str] = {
+    "all": "all",
+    "全部": "all",
+    "running": "running",
+    "progress": "running",
+    "active": "running",
+    "进行中": "running",
+    "success": "success",
+    "成功": "success",
+    "failed": "failed",
+    "fail": "failed",
+    "error": "failed",
+    "失败": "failed",
+}
+
+
+def status_label_zh(status: str) -> str:
+    key = (status or "").strip()
+    if not key:
+        return "-"
+    return STATUS_LABEL_ZH.get(key, key)
+
+
+def resolve_status_filter(token: str) -> tuple[str, frozenset[str] | None] | None:
+    """Map a user token to (display_label, status set). None set = no filter."""
+    raw = (token or "").strip()
+    if not raw:
+        return None
+    key = _FILTER_ALIASES.get(raw) or _FILTER_ALIASES.get(raw.lower())
+    if key == "all":
+        return ("全部", None)
+    if key == "running":
+        return ("进行中", ACTIVE_STATUSES)
+    if key == "success":
+        return ("成功", frozenset({"success"}))
+    if key == "failed":
+        return ("失败", _FAILED_STATUSES)
+    # Legacy exact ledger status still accepted, not advertised in help.
+    fine = raw.lower()
+    if fine in LEDGER_STATUSES:
+        return (status_label_zh(fine), frozenset({fine}))
+    return None
+
+
+def is_valid_ledger_status(status: str) -> bool:
+    return resolve_status_filter(status) is not None
+
+
+def user_status_help(*, include_all: bool = True) -> str:
+    parts: list[str] = []
+    if include_all:
+        parts.append("all / 全部")
+    parts.extend(
+        [
+            "running / 进行中",
+            "success / 成功",
+            "failed / 失败",
+        ]
+    )
+    return " · ".join(parts)
+
+
 _HELP_ALIASES = frozenset({"help", "?"})
 _QUERY_HEAD = re.compile(r"^query(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
 _EXPORT_HEAD = re.compile(r"^export(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
@@ -50,9 +135,9 @@ def parse_ops_command(text: str) -> OpsCommand | None:
         parts = rest.split(None, 1)
         mode = parts[0].lower()
         tail = parts[1].strip() if len(parts) > 1 else ""
-        # Only valid form: export table <all|status>
+        # Only valid form: export table <range>
         if mode == "table":
-            return OpsCommand(kind="export_table", arg=tail.lower())
+            return OpsCommand(kind="export_table", arg=tail)
         # e.g. "export aaa" — recognized as export, but invalid shape.
         return OpsCommand(kind="export_usage")
 
@@ -83,7 +168,3 @@ def parse_ops_command(text: str) -> OpsCommand | None:
             return OpsCommand(kind="export_usage")
         return OpsCommand(kind="query_usage")
     return OpsCommand(kind="help")
-
-
-def is_valid_ledger_status(status: str) -> bool:
-    return (status or "").strip() in LEDGER_STATUSES

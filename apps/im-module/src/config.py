@@ -11,6 +11,7 @@ from shared.module_registry import (
     all_modules,
     primary_module,
 )
+from ops_commands import user_status_help
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _APP_ROOT.parent.parent
@@ -36,10 +37,6 @@ DINGTALK_ROBOT_CODE = (os.environ.get("DINGTALK_ROBOT_CODE") or "").strip()
 
 MODULES = list(all_modules())
 _PRIMARY = primary_module()
-_LEDGER_STATUSES = tuple(
-    sorted(_PRIMARY.active_statuses | _PRIMARY.terminal_statuses)
-)
-_LEDGER_STATUS_HELP = " / ".join(("all", *_LEDGER_STATUSES))
 
 INBOX_DIR = _PRIMARY.inbox_dir
 TASKS_DB = SHARED_TASKS_DB
@@ -101,31 +98,35 @@ MSG_ENQUEUE_CORE_DEFERRED_FIRST = (
 MSG_ENQUEUE_CORE_DEFERRED_AGAIN = (
     "处理服务仍在恢复中；任务已登记，恢复后将自动继续。"
 )
+
+_STATUS_RANGE_HELP = user_status_help(include_all=True)
+
 OPS_TEMPLATE = (
     "用法：\n"
     "【提交任务】直接发送 APK 下载链接，可多条\n"
     f"  @{BOT_NAME} https://example.com/a.apk\n"
     f"  @{BOT_NAME} https://example.com/b.apk\n"
     "  ......\n"
-    "  说明：同一 APK 文件名会覆盖旧任务并重新跑（任务号不变）\n"
+    "  说明：同一 APK 文件名会覆盖旧任务并重新执行\n"
     "\n"
     "【查询】\n"
-    f"  @{BOT_NAME} query mine              查询我提交的任务进度\n"
-    f"  @{BOT_NAME} query progress          查询全部处理中的任务\n"
-    f"  @{BOT_NAME} query status success    按状态筛选\n"
+    f"  @{BOT_NAME} query mine              查询我提交的进行中任务\n"
+    f"  @{BOT_NAME} query progress          查询全部进行中（等同 status running）\n"
+    f"  @{BOT_NAME} query status running    按范围筛选\n"
     f"  @{BOT_NAME} query gid t-0002        按任务号查询\n"
     f"  @{BOT_NAME} query label 三国杀      按游戏名查询\n"
     f"  @{BOT_NAME} query password          查看 .zip 解压密码\n"
+    f"  范围：{_STATUS_RANGE_HELP}\n"
     "\n"
     "【健康检查】\n"
-    f"  @{BOT_NAME} ping                   检查 OpenCode 是否正常（正常回 pong）\n"
+    f"  @{BOT_NAME} ping                   检查 OpenCode 是否正常\n"
     "\n"
     "【导出】\n"
-    f"  @{BOT_NAME} export table all        导出任务表（全部状态）\n"
-    f"  @{BOT_NAME} export table success    导出指定状态的任务表\n"
-    f"  可选状态：{_LEDGER_STATUS_HELP}\n"
+    f"  @{BOT_NAME} export table all        导出全部（按文件名取最新）\n"
+    f"  @{BOT_NAME} export table failed     导出失败范围\n"
+    f"  范围：{_STATUS_RANGE_HELP}\n"
     "  字段：filename / label / status / error / updated_at / finished_at\n"
-    "  说明：账本按 filename 唯一；同名提交会覆盖旧记录\n"
+    "  说明：账本按 filename 唯一；同名提交会覆盖旧记录；status 列为中文\n"
     "\n"
     "【帮助】help / ?    【打招呼】你好 / hi    【检查】ping\n"
     "\n"
@@ -139,6 +140,7 @@ OPS_TEMPLATE = (
     "【解压密码】仅用于打开成功回传的 .zip；\n"
     "  忘记可用 query password 查询。"
 )
+
 
 _MSG_GREET_BODIES = (
     (

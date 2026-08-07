@@ -61,12 +61,12 @@ Legacy chat JSON / markdown code-fence JSON in that shape is still accepted.
 
 | Result | Delivery |
 | ------ | -------- |
-| `success` | 加密 `.zip` + 文字说明（含任务号、文件名；密码用 `query password`） |
-| Failure terminal | 文字：游戏名、任务号、状态、原因 |
-| Success but zip missing too long | 超时文字（默认约 10 分钟后停止回传） |
+| 成功 (`success`) | 加密 `.zip` + 文字说明（含任务号、文件名；密码用 `query password`） |
+| 失败终态 | 文字：游戏名、任务号、中文状态、原因 |
+| 成功但 zip 缺失过久 | 超时文字（默认约 10 分钟后停止回传） |
 
 
-Ledger statuses: section 4. Pipeline runs inside Module A.
+Ledger statuses: section 5. Pipeline runs inside Module A.
 
 ---
 
@@ -76,10 +76,10 @@ Source: Module A `tasks.db` (timestamps stored **UTC** `…Z`).
 Chat glances are **plain text** (~3500 char budget; times in **Asia/Shanghai** when shown).
 Excel export is a **separate** command: `export table` (section 4).
 
-Text columns for list/progress: game name · task id · status (+ short reason on failures).
-Detail cards (`query gid` / `query label`) are user-facing: game name, task id, status, update time, whether result `.zip` exists, whether group delivery happened; optional failure / delivery notes. No session/adb/hotfix.
+Text columns for list/progress: game name · task id · **Chinese status** (+ short reason on failures).
+Detail cards (`query gid` / `query label`) are user-facing: game name, task id, Chinese status, update time, whether result `.zip` exists, whether group delivery happened; optional failure / delivery notes. No session/adb/hotfix.
 
-List headers look like `【我的进行中任务】（共 N 条）` / `【全部进行中任务】` / `【状态：success】`.
+List headers look like `【我的进行中任务】（共 N 条）` / `【全部进行中任务】` / `【成功】` / `【失败】`.
 
 ### 3.1 My active tasks (asker view)
 
@@ -96,17 +96,30 @@ List headers look like `【我的进行中任务】（共 N 条）` / `【全部
 @bot query progress
 ```
 
-- Non-terminal statuses only (`queued` … `extract_done`), **entire ledger**.
+- Same range as `query status running` (queued … extract_done), **entire ledger**.
 - Max **30** rows (internal limit); if more: `showing 30/N` + hint `export table`.
 
-### 3.3 By status
+### 3.3 By status range
 
 ```text
-@bot query status timeout
+@bot query status running
+@bot query status success
+@bot query status failed
+@bot query status 失败
 ```
 
+User-facing ranges (English or Chinese):
+
+| token | meaning |
+| ----- | ------- |
+| `all` / `全部` | every row |
+| `running` / `进行中` | in progress |
+| `success` / `成功` | finished OK |
+| `failed` / `失败` | all terminal failures |
+
 - Max **20** rows (newest first). Over cap → hint `export table`.
-- Invalid status → short list of allowed statuses.
+- Missing / invalid range → short usage + the four ranges above.
+- Exact fine ledger codes (e.g. `timeout`) still work for power users; replies show Chinese labels.
 
 ### 3.4 By task id
 
@@ -120,7 +133,7 @@ List headers look like `【我的进行中任务】（共 N 条）` / `【全部
 ```text
 【游戏名】
 任务号：t-0002
-状态：success
+状态：成功
 更新：2026-08-06 11:18:07
 结果 zip：已生成
 群回传：2026-08-06 11:20:00
@@ -160,14 +173,19 @@ Optional lines: `原因：…` (task error), `回传说明：…` (delivery note
 
 ```text
 @bot export table all
+@bot export table running
 @bot export table success
+@bot export table failed
+@bot export table 失败
 ```
 
-- Unique by `filename` (latest `updated_at` wins; that row’s `status` / `error` / times overwrite older ones).
-- Columns: `filename`, `label`, `status`, `error`, `updated_at`, `finished_at`.
+Same ranges as §3.3 (`all` / `running` / `success` / `failed`, plus Chinese aliases).
+
+- Keep **latest row per `filename`** first (`updated_at` DESC), **then** apply the range filter.
+- Columns: `filename`, `label`, `status` (**Chinese label**), `error`, `updated_at`, `finished_at`.
 - Times in **Asia/Shanghai** as `YYYY-mm-DD: HH:mm`.
-- `all` = every status; otherwise filter by ledger status.
-- Invalid status → short allowed-status hint (includes `all`).
+- Invalid range → short hint listing the four tokens above.
+- Exact fine statuses still work for power users but are not advertised in help.
 - Hard cap 50000 unique filenames.
 - `query export` is retired and redirects to this command.
 
@@ -175,27 +193,27 @@ Optional lines: `原因：…` (task error), `回传说明：…` (delivery note
 
 ## 5. Ledger statuses
 
-Status is written only at stage boundaries (not progress percentages).
+DB / pipeline still use English codes (stage boundaries only, not progress percentages).
+**Chat and Excel always show the Chinese label** below.
 
 
-| status | meaning |
+| status (DB) | 用户可见 |
 | ------ | ------- |
-| `queued` | Enqueued, waiting download |
-| `downloaded` | APK on disk |
-| `patched` | decoded + debuggable done; waiting for a device |
-| `on_device` | Holding ADB (install / enter game / pull hotfix) |
-| `device_done` | Device stage done; ADB released; waiting OpenCode |
-| `on_extract` | Holding OpenCode |
-| `extract_done` | Extract finished; waiting archive |
-| `success` | Success |
-| `decrypt_failed` | Decrypt failed |
-| `assets_missing` | Asset texts not found |
-| `abnormal_exit` | Abnormal exit |
-| `failed` | Failed (incl. interrupted pipeline) |
-| `timeout` | Timeout |
+| `queued` | 排队中 |
+| `downloaded` | 已下载 |
+| `patched` | 已改包 |
+| `on_device` | 设备处理中 |
+| `device_done` | 设备完成 |
+| `on_extract` | 提取中 |
+| `extract_done` | 提取完成 |
+| `success` | 成功 |
+| `decrypt_failed` | 解密失败 |
+| `assets_missing` | 资源缺失 |
+| `abnormal_exit` | 异常退出 |
+| `failed` | 失败 |
+| `timeout` | 超时 |
 
 
-Chat shows a slim subset; full fields remain in `tasks.db`.
 `query all` / `query top_n` are unsupported (limits are internal).
 
 ---

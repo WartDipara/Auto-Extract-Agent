@@ -367,6 +367,25 @@ def test_ops_commands_parse():
     assert ops_commands.parse_ops_command("你好呀！").kind == "greet"
     assert ops_commands.parse_ops_command("Hello").kind == "greet"
     assert ops_commands.parse_ops_command("query all").kind == "query_usage"
+
+    label, statuses = ops_commands.resolve_status_filter("running")
+    assert label == "进行中"
+    assert statuses == ops_commands.ACTIVE_STATUSES
+    label, statuses = ops_commands.resolve_status_filter("failed")
+    assert label == "失败"
+    assert "success" not in statuses
+    assert "timeout" in statuses
+    assert ops_commands.resolve_status_filter("失败") == (
+        "失败",
+        frozenset(s for s in ops_commands.TERMINAL_STATUSES if s != "success"),
+    )
+    assert ops_commands.resolve_status_filter("queued") == (
+        "排队中",
+        frozenset({"queued"}),
+    )
+    assert ops_commands.resolve_status_filter("nope") is None
+    assert ops_commands.status_label_zh("on_device") == "设备处理中"
+    assert ops_commands.status_label_zh("success") == "成功"
     assert ops_commands.parse_ops_command("query top_n 20").kind == "query_usage"
     assert ops_commands.parse_ops_command("查询表格 all") is None
     assert ops_commands.parse_ops_command('{"get-texts":{"urls":["x"]}}') is None
@@ -510,6 +529,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert exported.row_count == 2
     assert "已导出表格" in exported.message
     assert "全部" in exported.message
+    assert "按文件名取最新" in exported.message
     from openpyxl import load_workbook
 
     wb = load_workbook(exported.file_path, read_only=True)
@@ -526,7 +546,7 @@ def test_ledger_query_text(tmp_path, monkeypatch):
     assert any(r[0] == "a.apk" and r[1] == "Game" for r in body)
     assert not any(r[0] == "a.apk" and r[1] == "GameOld" for r in body)
     a_row = next(r for r in body if r[0] == "a.apk")
-    assert a_row[2] == "success"
+    assert a_row[2] == "成功"
     assert a_row[3] in ("", None)
     assert a_row[4] == "2026-08-04: 20:01"
     assert a_row[5] == "2026-08-04: 20:01"
@@ -535,23 +555,55 @@ def test_ledger_query_text(tmp_path, monkeypatch):
         ops_commands.OpsCommand(kind="export_table", arg="success")
     )
     assert success_only.ok and success_only.row_count == 1
-    assert "状态 success" in success_only.message
+    assert "成功" in success_only.message
+
+    running_only = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_table", arg="running")
+    )
+    assert running_only.ok and running_only.row_count == 1
+    assert "进行中" in running_only.message
+
+    # Latest a.apk is success → failed range excludes it after unique-first
+    failed_only = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_table", arg="failed")
+    )
+    assert failed_only.ok and failed_only.row_count == 0
+    assert "失败" in failed_only.message
+
+    cn_failed = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="export_table", arg="失败")
+    )
+    assert cn_failed.ok and cn_failed.row_count == 0
+
+    empty_status = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="query_status", arg="")
+    )
+    assert not empty_status.ok
+    assert "query status" in empty_status.message
+    assert "running" in empty_status.message
+
+    gid_zh = task_ledger_query.run_ledger_query(
+        ops_commands.OpsCommand(kind="query_gid", arg="t-0001")
+    )
+    assert gid_zh.ok and "状态：成功" in gid_zh.message
 
     bad_shape = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_usage")
     )
     assert not bad_shape.ok
-    assert "export table all" in bad_shape.message
-    assert "状态不正确" in bad_shape.message
+    assert "export table" in bad_shape.message
+    assert "范围" in bad_shape.message
     assert "【提交任务】" not in bad_shape.message
 
     bad = task_ledger_query.run_ledger_query(
         ops_commands.OpsCommand(kind="export_table", arg="nope")
     )
     assert not bad.ok
-    assert "状态不正确" in bad.message
+    assert "范围不正确" in bad.message
     assert "all" in bad.message
+    assert "running" in bad.message
     assert "success" in bad.message
+    assert "failed" in bad.message
     assert "【提交任务】" not in bad.message
 
     miss = task_ledger_query.run_ledger_query(
