@@ -76,6 +76,9 @@ def test_opencode_prompt_and_cmd():
     assert layout["opencode_export"].name == "opencode_session.json"
     stall = eb.build_opencode_resume_prompt("stall_continue", apk_name, snap)
     assert "半小时" in stall and "继续" in stall
+    deadline = eb.build_opencode_resume_prompt("deadline_persist", apk_name, snap)
+    assert "一小时" in deadline and "落盘" in deadline
+    assert "解密失败" in deadline and "禁止改写" in deadline
     empty = eb.build_opencode_resume_prompt("classify_empty", apk_name, snap)
     assert config.ASSETS_MISSING_TEXT in empty
     assert config.DECRYPT_FAIL_TEXT in empty

@@ -107,6 +107,17 @@ def write_decrypt_fail_csv(
     layout = task_layout(_resolve_task_root(task_root))
     layout["outputs"].mkdir(parents=True, exist_ok=True)
     csv_path = layout["tests_csv"]
+    # Never clobber a real extract (or an agent-written terminal marker).
+    if output_csv_has_content(csv_path):
+        _log.warning(
+            "skip decrypt-fail overwrite; keep existing tests.csv: %s",
+            csv_path,
+        )
+        print(
+            f"skip decrypt-fail overwrite; keep existing {csv_path.name}",
+            flush=True,
+        )
+        return csv_path
     detail = reason or f"超时，超过 {config.AGENT_TIMEOUT_SEC} 秒，进程已被终止"
     csv_path.write_text(
         f"text\n{config.DECRYPT_FAIL_TEXT}（{detail}）\n",
@@ -455,7 +466,8 @@ def invoke_opencode(
         elif getattr(r2, "kill_reason", None) == "hard_timeout":
             write_decrypt_fail_csv(apk_name, reason="OpenCode 硬超时且未产出 tests.csv")
         elif r2.stalled:
-            # Second stall budget exhausted → force terminal decrypt_failed (marker only).
+            # Second stall budget ≈ 1h: nudge once to persist, then keep whatever
+            # valid tests.csv the agent wrote. Do NOT force-overwrite success.
             dump = build_opencode_resume_prompt("deadline_persist", apk_name, snap)
             _run(
                 "deadline_persist",
@@ -464,11 +476,17 @@ def invoke_opencode(
                 skill=None,
                 use_stall=False,
             )
-            forced_decrypt_fail = True
-            write_decrypt_fail_csv(
-                apk_name,
-                reason="已满一小时，催促落盘后仍判定为解密失败",
-            )
+            if _opencode_tests_ok():
+                print(
+                    "deadline_persist kept existing tests.csv; skip forced decrypt_fail",
+                    flush=True,
+                )
+            else:
+                forced_decrypt_fail = True
+                write_decrypt_fail_csv(
+                    apk_name,
+                    reason="已满一小时，催促落盘后仍无有效 tests.csv",
+                )
         else:
             _resume_missing_output(mgr, apk_name, snap, task_key, _run)
     else:
