@@ -11,16 +11,11 @@ from langgraph.errors import GraphRecursionError
 
 from small_agent.config import SmallAgentSettings, load_settings
 from small_agent.llm import build_chat_model
-from small_agent.prompts import (
-    SYSTEM_PROMPT,
-    TASK_BOOTSTRAP,
-    format_ocr_user_message,
-)
+from small_agent.prompts import SYSTEM_PROMPT, format_ocr_user_message
 from small_agent.tools import FrameOutcome, FrameSession, TapDevice, build_tools
 
 _log = logging.getLogger(__name__)
 
-_BOOTSTRAP_RECURSION = 4
 _DECIDE_RECURSION = 4
 
 
@@ -54,6 +49,7 @@ class UiAgentSession:
         self._frame = FrameSession(adb=adb)
         self._thread_id = thread_id or f"prep-{uuid.uuid4().hex[:12]}"
         self._bootstrapped = False
+        self._checkpointer = InMemorySaver()
         if agent is not None:
             self._agent = agent
         else:
@@ -62,7 +58,7 @@ class UiAgentSession:
                 model=model,
                 tools=build_tools(self._frame),
                 system_prompt=SYSTEM_PROMPT,
-                checkpointer=InMemorySaver(),
+                checkpointer=self._checkpointer,
             )
 
     @property
@@ -76,14 +72,15 @@ class UiAgentSession:
         }
 
     def bootstrap(self) -> None:
+        """Local-only: system prompt already carries instructions (no API round)."""
         if self._bootstrapped:
             return
-        self._agent.invoke(
-            {"messages": [{"role": "user", "content": TASK_BOOTSTRAP}]},
-            self._config(_BOOTSTRAP_RECURSION),
-        )
         self._bootstrapped = True
-        print("small_agent bootstrap done", flush=True)
+        print("small_agent bootstrap local (no api)", flush=True)
+
+    def reset_memory(self) -> None:
+        """Rotate thread id after relaunch (decides already use fresh threads)."""
+        self._thread_id = f"prep-{uuid.uuid4().hex[:12]}"
 
     def decide(
         self,
@@ -95,6 +92,9 @@ class UiAgentSession:
         if not ocr_worth_decide(items):
             print(f"ocr gate skip llm (sparse ocr) poll={poll}", flush=True)
             return FrameOutcome(kind="wait")
+
+        # Fresh thread each decide → no O(N^2) history growth.
+        self._thread_id = f"prep-{uuid.uuid4().hex[:12]}"
 
         self._frame.set_items(items)
         content = format_ocr_user_message(items, poll=poll, note=note)

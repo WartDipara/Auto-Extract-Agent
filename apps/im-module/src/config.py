@@ -59,9 +59,6 @@ if not _announce and IM_CHANNEL in ("dingtalk", "dingding"):
     _announce = (os.environ.get("DINGTALK_TEST_CHAT_ID") or "").strip()
 ANNOUNCE_CHAT_ID = _announce
 ANNOUNCE_CHAT_STATE = (_APP_ROOT / "state" / "announce_chat.json").resolve()
-DINGTALK_SESSION_STATE = (
-    _APP_ROOT / "state" / "dingtalk_session_replies.json"
-).resolve()
 DELIVERY_AUDIT_PATH = (_APP_ROOT / "state" / "delivery_audit.jsonl").resolve()
 PENDING_INBOX_STATE = (_APP_ROOT / "state" / "pending_inbox.json").resolve()
 SERVICE_LOG = (_APP_ROOT / "state" / "service.log").resolve()

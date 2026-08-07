@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import tempfile
 import time
@@ -10,6 +9,7 @@ from pathlib import Path
 import config
 from .adb_device import AdbDevice
 from .foreground_watch import ForegroundWatch
+from .gate_rules import content_fingerprint, try_local_action
 from .ocr_util import ocr_image, texts_joined
 from .screen_coord import resolve_screen_coord_space
 from small_agent import UiAgentSession, ping_model
@@ -24,13 +24,17 @@ def wait_until_entry_screen(
     package_name: str,
     timeout_sec: float = 1200,
     poll_sec: float = 3.0,
-    agent_interval_sec: float = 3.0,
+    agent_interval_sec: float = 10.0,
     foreground_poll_sec: float = 1.5,
+    wait_cooldown_sec: float = 20.0,
     thread_id: str | None = None,
 ) -> str:
     """
-    Navigate privacy/download via small_agent until login/start/server entry.
-    Returns scene label, or crash / ai_unavailable. Raises TimeoutError on budget.
+    Navigate privacy/download until login/start/server entry.
+
+    Local OCR rules run first; LLM is only used when rules cannot decide.
+    Returns scene label, or crash / ai_unavailable / gate_error.
+    Raises TimeoutError on budget.
     """
     if not adb.is_package_running(package_name):
         time.sleep(2.0)
@@ -48,34 +52,37 @@ def wait_until_entry_screen(
     watch.start()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ui-decide")
     decide_future: Future | None = None
+    session: UiAgentSession | None = None
     try:
-        try:
-            if not ping_model():
-                return "ai_unavailable"
-        except Exception as exc:
-            _log.warning("ocr gate ping_model failed: %s", exc)
-            return "ai_unavailable"
-
-        session = UiAgentSession(adb, thread_id=thread_id)
-        try:
-            session.bootstrap()
-        except Exception as exc:
-            _log.exception("ocr gate bootstrap failed: %s", exc)
-            print(f"ocr gate bootstrap failed: {exc}", flush=True)
-            return "gate_error"
-
         deadline = time.monotonic() + timeout_sec
         shot_dir = Path(tempfile.mkdtemp(prefix="ocr_gate_"))
         last_fp = ""
         last_decide_at = 0.0
+        llm_cooldown_until = 0.0
         note = ""
         n = 0
         relaunches = 0
         relaunch_max = max(0, int(getattr(config, "PREP_GATE_RELAUNCH_MAX", 3)))
+        cooldown = float(wait_cooldown_sec)
         print(
-            f"ocr gate watching screen (small_agent, interval={agent_interval_sec}s)...",
+            f"ocr gate watching (rules-first, llm_interval={agent_interval_sec}s, "
+            f"wait_cooldown={cooldown}s)...",
             flush=True,
         )
+
+        def _ensure_session() -> UiAgentSession | None:
+            nonlocal session
+            if session is not None:
+                return session
+            try:
+                if not ping_model():
+                    return None
+            except Exception as exc:
+                _log.warning("ocr gate ping_model failed: %s", exc)
+                return None
+            session = UiAgentSession(adb, thread_id=thread_id)
+            session.bootstrap()
+            return session
 
         while time.monotonic() < deadline:
             n += 1
@@ -86,7 +93,6 @@ def wait_until_entry_screen(
                 time.sleep(poll_sec)
                 continue
             if action == "crash":
-                # Update dialogs often force-quit the process; relaunch and continue.
                 if relaunches < relaunch_max:
                     relaunches += 1
                     print(
@@ -119,6 +125,9 @@ def wait_until_entry_screen(
                         decide_future = None
                         last_fp = ""
                         last_decide_at = 0.0
+                        llm_cooldown_until = 0.0
+                        if session is not None:
+                            session.reset_memory()
                         note = (
                             "game process restarted after update/exit; "
                             "continue privacy/download/entry flow"
@@ -132,7 +141,6 @@ def wait_until_entry_screen(
             if action == "brought_back":
                 note = "just brought back from external/background UI"
 
-            # Prior decide still running: skip this tick, never start another.
             if decide_future is not None and not decide_future.done():
                 if n == 1 or n % 5 == 0:
                     print(f"ocr gate skip: decide still running poll={n}", flush=True)
@@ -158,14 +166,19 @@ def wait_until_entry_screen(
                     scene = outcome.scene or "entry"
                     print(f"ocr gate hit entry: {scene}", flush=True)
                     return scene
+                if outcome.kind == "wait":
+                    llm_cooldown_until = time.monotonic() + cooldown
                 time.sleep(poll_sec)
                 continue
 
             now = time.monotonic()
-            wait_for = agent_interval_sec - (now - last_decide_at)
-            if last_decide_at > 0 and wait_for > 0:
-                time.sleep(min(wait_for, poll_sec))
+            if now < llm_cooldown_until:
+                time.sleep(min(poll_sec, llm_cooldown_until - now))
                 continue
+
+            wait_for = agent_interval_sec - (now - last_decide_at)
+            # Interval only gates LLM falls-through; local rules always allowed.
+            # (Applied after OCR below when rules miss.)
 
             shot = shot_dir / f"gate_{n}.png"
             try:
@@ -177,25 +190,58 @@ def wait_until_entry_screen(
                 print(f"ocr gate frame error poll={n}: {exc}", flush=True)
                 time.sleep(poll_sec)
                 continue
+
             blob = texts_joined(items)
-            fp = hashlib.sha1(blob.encode("utf-8", errors="replace")).hexdigest()
+            fp = content_fingerprint(items)
             _log.info(
                 "ocr gate poll=%s text_sample=%s",
                 n,
                 blob[:240].replace("\n", " | "),
             )
 
+            local = try_local_action(adb, items)
+            if local is not None:
+                print(
+                    f"ocr gate rule: {local.kind}"
+                    f"{' ' + local.scene if local.scene else ''}"
+                    f"{' ' + local.text if local.text else ''} poll={n}",
+                    flush=True,
+                )
+                if local.kind == "done":
+                    scene = local.scene or "entry"
+                    print(f"ocr gate hit entry: {scene}", flush=True)
+                    return scene
+                last_fp = fp
+                last_decide_at = time.monotonic()
+                if local.kind == "wait":
+                    llm_cooldown_until = time.monotonic() + cooldown
+                elif local.kind == "tap":
+                    # Brief settle after tap before next OCR.
+                    time.sleep(min(poll_sec, 1.5))
+                else:
+                    time.sleep(poll_sec)
+                continue
+
             if fp == last_fp:
                 if n == 1 or n % 5 == 0:
                     print(f"ocr gate unchanged; wait poll={n}", flush=True)
                 time.sleep(poll_sec)
                 continue
+
+            if last_decide_at > 0 and wait_for > 0:
+                time.sleep(min(wait_for, poll_sec))
+                continue
+
             last_fp = fp
+            agent = _ensure_session()
+            if agent is None:
+                print("ocr gate: ai unavailable for undecided frame", flush=True)
+                return "ai_unavailable"
 
             submit_note = note
             note = ""
             decide_future = executor.submit(
-                session.decide,
+                agent.decide,
                 items,
                 poll=n,
                 note=submit_note,

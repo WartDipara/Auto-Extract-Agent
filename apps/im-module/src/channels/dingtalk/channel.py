@@ -5,7 +5,6 @@ import json
 import logging
 import re
 import threading
-import time
 from collections import deque
 from pathlib import Path
 from time import monotonic
@@ -19,11 +18,9 @@ from dingtalk_stream.chatbot import ChatbotHandler
 from channels.base import IncomingChat, MessageHandler
 from channels.dingtalk.openapi import (
     DingTalkOpenApi,
-    SessionReplyTarget,
     resolve_send_file_meta,
 )
 from channels.dingtalk.session import parse_session_key, session_from_incoming
-from channels.dingtalk.session_store import load_session_replies, save_session_replies
 
 _log = logging.getLogger(__name__)
 
@@ -101,7 +98,6 @@ class DingTalkChannel:
         client_secret: str,
         *,
         robot_code: str | None = None,
-        session_state_path: Path | str | None = None,
     ):
         self._client_id = client_id
         self._client_secret = client_secret
@@ -110,24 +106,8 @@ class DingTalkChannel:
         self._on_message: MessageHandler | None = None
         self._seen = _SeenIds()
         self._stop = threading.Event()
-        self._reply_lock = threading.Lock()
-        self._session_state_path = (
-            Path(session_state_path)
-            if session_state_path
-            else None
-        )
-        self._session_replies: dict[str, SessionReplyTarget] = {}
         self._stream_client: DingTalkStreamClient | None = None
         self._stream_loop: asyncio.AbstractEventLoop | None = None
-        if self._session_state_path is not None:
-            loaded = load_session_replies(self._session_state_path)
-            self._session_replies.update(loaded)
-            if loaded:
-                _log.info(
-                    "dingtalk session store loaded path=%s chats=%s",
-                    self._session_state_path,
-                    len(loaded),
-                )
 
     def stop(self) -> None:
         self._stop.set()
@@ -284,7 +264,6 @@ class DingTalkChannel:
         chat_id = target.to_key()
         sender_id = (msg.sender_staff_id or "").strip()
         sender_name = (msg.sender_nick or "").strip()
-        self._remember_session_reply(chat_id, msg, sender_id=sender_id, sender_name=sender_name)
         if self._on_message:
             self._on_message(
                 IncomingChat(
@@ -302,72 +281,27 @@ class DingTalkChannel:
         *,
         at_user_ids: Sequence[str] | None = None,
     ) -> None:
-        at_ids = [u.strip() for u in (at_user_ids or ()) if (u or "").strip()]
-        session_reply = self._session_replies.get(chat_id)
-        if session_reply is not None and session_reply.alive():
-            try:
-                self._api.reply_session_text(
-                    session_reply,
-                    text,
-                    at_user_ids=at_ids or None,
-                )
-                _log.info(
-                    "dingtalk reply channel=session chat_id=%s at=%s",
-                    chat_id,
-                    at_ids or "-",
-                )
-                return
-            except Exception:
-                _log.exception(
-                    "dingtalk sessionWebhook reply failed; fallback openapi chat_id=%s",
-                    chat_id,
-                )
-        elif session_reply is not None:
-            with self._reply_lock:
-                self._session_replies.pop(chat_id, None)
-                self._persist_session_replies_unlocked()
-        self._reply_openapi(chat_id, text, at_ids=at_ids)
+        """Unified outbound: OpenAPI to the chat only (stay in the group)."""
+        _ = at_user_ids  # Group OpenAPI cannot @; keep arg for Channel API parity.
+        self._reply_openapi(chat_id, text)
 
     def broadcast_text(self, chat_id: str, text: str) -> None:
-        """Lifecycle broadcast: always OpenAPI so every group is reached the same way."""
-        self._reply_openapi(chat_id, text, at_ids=[])
+        """Lifecycle broadcast — same OpenAPI path."""
+        self._reply_openapi(chat_id, text)
 
-    def _reply_openapi(
-        self, chat_id: str, text: str, *, at_ids: list[str]
-    ) -> None:
+    def _reply_openapi(self, chat_id: str, text: str) -> None:
         target = parse_session_key(chat_id)
         try:
             if target.kind == "group":
                 self._api.send_group_text(target.value, text)
-                # OpenAPI group send cannot @; OTO compensates when needed.
-                if at_ids:
-                    oto_text = f"[任务回传]\n{text}"
-                    for uid in at_ids:
-                        try:
-                            self._api.send_oto_text(uid, oto_text)
-                        except Exception:
-                            _log.exception(
-                                "dingtalk OTO notify failed chat_id=%s user=%s",
-                                chat_id,
-                                uid,
-                            )
-                    _log.info(
-                        "dingtalk reply channel=openapi+oto chat_id=%s at=%s",
-                        chat_id,
-                        at_ids,
-                    )
-                else:
-                    _log.info(
-                        "dingtalk reply channel=openapi chat_id=%s at=-",
-                        chat_id,
-                    )
-            elif target.kind == "oto":
-                self._api.send_oto_text(target.value, text)
                 _log.info(
-                    "dingtalk reply channel=oto chat_id=%s at=%s",
+                    "dingtalk reply channel=openapi chat_id=%s",
                     chat_id,
-                    at_ids or "-",
                 )
+            elif target.kind == "oto":
+                # Only used as last resort when the original group is gone.
+                self._api.send_oto_text(target.value, text)
+                _log.info("dingtalk reply channel=oto chat_id=%s", chat_id)
             else:
                 raise ValueError(f"unknown session kind {target.kind}")
         except Exception:
@@ -407,39 +341,6 @@ class DingTalkChannel:
         name, _ = resolve_send_file_meta(path)
         return name
 
-    def _remember_session_reply(
-        self,
-        chat_id: str,
-        msg: ChatbotMessage,
-        *,
-        sender_id: str,
-        sender_name: str,
-    ) -> None:
-        webhook = (msg.session_webhook or "").strip()
-        if not webhook:
-            return
-        expire_at = int(msg.session_webhook_expired_time or 0)
-        if expire_at <= 0:
-            expire_at = int(time.time() * 1000) + 3_600_000
-        with self._reply_lock:
-            self._session_replies[chat_id] = SessionReplyTarget(
-                webhook=webhook,
-                expire_at_ms=expire_at,
-                sender_staff_id=sender_id,
-                sender_nick=sender_name,
-            )
-            self._persist_session_replies_unlocked()
-
-    def _persist_session_replies_unlocked(self) -> None:
-        if self._session_state_path is None:
-            return
-        try:
-            save_session_replies(self._session_state_path, self._session_replies)
-        except OSError:
-            _log.exception(
-                "dingtalk session store write failed path=%s",
-                self._session_state_path,
-            )
 
 def _extract_text(msg: ChatbotMessage) -> str | None:
     if msg.text is None or msg.text.content is None:

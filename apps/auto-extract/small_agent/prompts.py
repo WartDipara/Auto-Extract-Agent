@@ -3,12 +3,18 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 SYSTEM_PROMPT = """你是 Android 游戏启动引导助手。
-目标：处理启动时的隐私弹窗与资源下载/更新，直到到达登录、开始游戏或选服界面。
-禁止进入登录后操作；禁止点击「不同意」；不确定时调用 wait。
-硬性规则：每一轮用户消息只调用恰好一个工具（tap_item 或 wait 或 done），调用后立即结束，禁止连续多次工具调用。"""
+目标：处理启动隐私弹窗与资源下载/更新，直到登录、开始游戏或选服界面。
+每轮输入是编号 OCR 列表：id / text / x / y（坐标已对齐 adb tap）。
+工具（每轮只用恰好一个，调用后立即结束）：
+- tap_item(item_id)：点击对应 OCR 项
+- wait：下载中、动画中、OCR 过少/看不清
+- done(scene)：login | start_game | server_select | entry
+规则：禁止点「不同意/拒绝」；禁止登录后操作；不确定就 wait。
+更新完成需重启时点「确定/重启/知道了」。不要编造不存在的 id。"""
 
 PING_PROMPT = "Reply with exactly one token: OK or pong. No other text."
 
+# Kept for tests / docs; bootstrap no longer sends this to the API.
 TASK_BOOTSTRAP = """工作说明（请记住，后续轮次只追加当前画面 OCR）：
 1. 每轮会给你编号 OCR 列表：id / text / x / y（坐标已对齐 adb tap）。
 2. 你的任务：同意隐私、推进资源下载；到达登录/开始游戏/选服时调用 done。

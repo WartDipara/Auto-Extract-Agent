@@ -167,11 +167,14 @@ def test_ui_agent_decide_with_fake_agent():
     adb = FakeAdb()
     calls: list[str] = []
     holder: dict = {}
+    threads: list[str] = []
 
     class ToolingAgent:
         def invoke(self, payload, config=None):
             content = payload["messages"][0]["content"]
             calls.append(content)
+            if config:
+                threads.append(config["configurable"]["thread_id"])
             if "poll=" in content:
                 holder["s"]._frame.outcome = FrameOutcome(kind="done", scene="login")
             return {}
@@ -179,11 +182,14 @@ def test_ui_agent_decide_with_fake_agent():
     session = UiAgentSession(adb, thread_id="test-thread", agent=ToolingAgent())
     holder["s"] = session
     session.bootstrap()
-    assert any("工作说明" in c for c in calls)
+    assert calls == []  # local bootstrap — no API
 
     out = session.decide([FakeOcr("登录", 1, 2)], poll=1)
     assert out.kind == "done"
     assert out.scene == "login"
+    assert any("poll=1" in c for c in calls)
+    # Fresh thread per decide (no history pile-up).
+    assert threads and threads[0] != "test-thread"
     print("SMALL_AGENT_DECIDE_OK", flush=True)
 
 

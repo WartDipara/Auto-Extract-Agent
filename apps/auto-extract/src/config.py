@@ -81,7 +81,10 @@ AAPT_PATH = ""
 ADB_CMD = "adb"
 PREP_GATE_TIMEOUT_SEC = 1200
 PREP_OCR_POLL_SEC = 3.0
-PREP_AGENT_INTERVAL_SEC = 3.0
+# LLM fallback interval (local rules ignore this and run every poll).
+PREP_AGENT_INTERVAL_SEC = 10.0
+# After a wait (rule or LLM), suppress further LLM queries this long.
+PREP_GATE_WAIT_COOLDOWN_SEC = 20.0
 # Poison inbox json: after this many unexpected process failures -> rejected_.
 INBOX_PROCESS_MAX_ATTEMPTS = 5
 # Optional pin; empty = adb auto-pick. Set in .env only.

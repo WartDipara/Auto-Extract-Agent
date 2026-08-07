@@ -155,6 +155,7 @@ def run_device_stage(
                 poll_sec=config.PREP_OCR_POLL_SEC,
                 agent_interval_sec=float(config.PREP_AGENT_INTERVAL_SEC),
                 foreground_poll_sec=float(config.PREP_FOREGROUND_POLL_SEC),
+                wait_cooldown_sec=float(config.PREP_GATE_WAIT_COOLDOWN_SEC),
             )
             stage(f"entry screen reached: {screen_reached}")
         except TimeoutError:
