@@ -59,6 +59,12 @@ OPENCODE_SKILL = "get-game-text-skill"
 OPENCODE_VARIANT = "max"
 OPENCODE_OUTPUT_NAME = "tests.csv"
 OPENCODE_STALL_SEC = 1800
+# Work-phase: no live stdout this long → kill as idle.
+OPENCODE_IDLE_SEC = 600
+OPENCODE_IDLE_HEARTBEAT_SEC = 60
+# Wrap-up (deadline_persist): hard wall clock + shorter idle.
+OPENCODE_WRAPUP_SEC = 600
+OPENCODE_WRAPUP_IDLE_SEC = 180
 OPENCODE_MISSING_OUTPUT_MAX = 2
 OPENCODE_QUALITY_RESUME_MAX = 2
 OPENCODE_EMPTY_CLASSIFY_MAX = 1
@@ -72,7 +78,8 @@ ABNORMAL_EXIT_TEXT = "异常退出"
 CSV_MIN_LINES = 5000
 CSV_GARBLE_MIN_LINES = 10
 CSV_GARBLE_RATIO = 0.01
-SENSITIVE_HIT_MIN = 5
+# Exact-line political hits must reach this count before quality_sensitive resume.
+SENSITIVE_HIT_MIN = 1000
 CSV_LARGE_REVIEW_LINES = 300000
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256

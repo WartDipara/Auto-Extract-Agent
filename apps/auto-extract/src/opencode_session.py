@@ -27,8 +27,43 @@ class OpenCodeRunResult:
     session_id: str = ""
     stdout_text: str = ""
     stalled: bool = False
-    # None | "stall" | "hard_timeout" | "stop" | "interrupt"
+    # None | "stall" | "idle" | "abnormal_stop" | "hard_timeout" | "stop" | "interrupt"
     kill_reason: str | None = None
+    open_tool: str = ""
+    last_event_type: str = ""
+
+
+@dataclass
+class _StreamEventState:
+    """Track incomplete step/tool pairs from --format json."""
+
+    open_steps: int = 0
+    open_tools: list[str] | None = None
+    last_event_type: str = ""
+
+    def __post_init__(self) -> None:
+        if self.open_tools is None:
+            self.open_tools = []
+
+    def observe(self, etype: str, tool_name: str = "") -> None:
+        self.last_event_type = etype or self.last_event_type
+        if etype in ("step_start", "step.start"):
+            self.open_steps += 1
+        elif etype in ("step_finish", "step.finish", "step_end"):
+            self.open_steps = max(0, self.open_steps - 1)
+        elif etype in ("tool_use", "tool_call", "tool.start"):
+            self.open_tools.append(tool_name or "tool")
+        elif etype in ("tool_result", "tool_end", "tool.finish"):
+            if self.open_tools:
+                self.open_tools.pop()
+
+    @property
+    def incomplete(self) -> bool:
+        return self.open_steps > 0 or bool(self.open_tools)
+
+    @property
+    def open_tool(self) -> str:
+        return self.open_tools[-1] if self.open_tools else ""
 
 
 @dataclass
@@ -240,6 +275,7 @@ class OpenCodeSessionManager:
         stall_sec: float | None = None,
         stall_output_path: Path | None = None,
         hard_timeout_sec: float | None = None,
+        idle_sec: float | None = None,
         stop_path: Path | None = None,
     ) -> OpenCodeRunResult:
         """
@@ -250,6 +286,9 @@ class OpenCodeSessionManager:
         stall_sec: 若进程仍在跑且 stall_output_path 仍无有效内容，超时则 kill，
         返回 stalled=True（用于 resume.stall_continue / deadline_persist）。
         若期间已写出有效产物，则不再因 stall 杀进程，改等自然退出或 hard_timeout。
+
+        idle_sec: 若 stdout 连续无新输出达到该秒数，kill（kill_reason=idle），
+        用于工具卡死但进程仍存活的情况；与是否已有 tests.csv 无关。
 
         stop_path: 若该文件出现，杀进程树并以 kill_reason="stop" 返回。
         """
@@ -282,6 +321,9 @@ class OpenCodeSessionManager:
         _log.info("%s", label)
         print(f"=== {label} ===", flush=True)
 
+        if idle_sec is None:
+            idle_sec = float(getattr(config, "OPENCODE_IDLE_SEC", 0) or 0) or None
+
         result = _run_json_stream(
             cmd,
             cwd=cwd,
@@ -289,6 +331,7 @@ class OpenCodeSessionManager:
             stall_sec=stall_sec,
             stall_output_path=stall_output_path,
             hard_timeout_sec=hard_timeout_sec,
+            idle_sec=idle_sec,
             stop_path=stop_path,
         )
         sid = result.session_id or session_id
@@ -306,6 +349,7 @@ def _run_json_stream(
     stall_sec: float | None = None,
     stall_output_path: Path | None = None,
     hard_timeout_sec: float | None = None,
+    idle_sec: float | None = None,
     stop_path: Path | None = None,
 ) -> OpenCodeRunResult:
     proc = subprocess.Popen(
@@ -322,6 +366,7 @@ def _run_json_stream(
     text_chunks: list[str] = []
     stalled = False
     kill_reason: str | None = None
+    events = _StreamEventState()
     print("--- live output ---", flush=True)
 
     line_queue: queue_mod.Queue = queue_mod.Queue()
@@ -339,12 +384,16 @@ def _run_json_stream(
     threading.Thread(target=_reader, name="opencode-stdout", daemon=True).start()
 
     start = time.monotonic()
+    last_output_at = start
+    last_heartbeat_at = start
+    heartbeat_sec = float(getattr(config, "OPENCODE_IDLE_HEARTBEAT_SEC", 60) or 60)
     stall_deadline = (start + stall_sec) if stall_sec and stall_sec > 0 else None
     hard_deadline = (
         (start + hard_timeout_sec)
         if hard_timeout_sec and hard_timeout_sec > 0
         else None
     )
+    idle_limit = float(idle_sec) if idle_sec and idle_sec > 0 else None
     stall_armed = stall_deadline is not None
 
     try:
@@ -362,6 +411,24 @@ def _run_json_stream(
                 _log.error("opencode hard timeout after %ss", hard_timeout_sec)
                 stalled = True
                 kill_reason = "hard_timeout"
+                _kill_proc(proc)
+                break
+
+            if idle_limit is not None and (now - last_output_at) >= idle_limit:
+                quiet = int(now - last_output_at)
+                _log.warning(
+                    "opencode stdout idle after %ss (limit=%ss) pid=%s",
+                    quiet,
+                    int(idle_limit),
+                    proc.pid,
+                )
+                print(
+                    f"stdout idle {quiet}s (no live output); "
+                    f"killing hung opencode pid={proc.pid}...",
+                    flush=True,
+                )
+                stalled = True
+                kill_reason = "idle"
                 _kill_proc(proc)
                 break
 
@@ -388,6 +455,20 @@ def _run_json_stream(
                     _kill_proc(proc)
                     break
 
+            if (
+                heartbeat_sec > 0
+                and (now - last_heartbeat_at) >= heartbeat_sec
+                and (now - last_output_at) >= heartbeat_sec
+            ):
+                quiet = int(now - last_output_at)
+                print(
+                    f"opencode still running pid={proc.pid}; "
+                    f"no live output for {quiet}s "
+                    f"(idle_limit={int(idle_limit) if idle_limit else '-'}s)",
+                    flush=True,
+                )
+                last_heartbeat_at = now
+
             try:
                 line = line_queue.get(timeout=0.2)
             except queue_mod.Empty:
@@ -412,7 +493,11 @@ def _run_json_stream(
                 break
             if not line:
                 continue
-            sid, human = _parse_json_event(line)
+            last_output_at = time.monotonic()
+            last_heartbeat_at = last_output_at
+            sid, human, etype, tool_name = _parse_json_event(line)
+            if etype:
+                events.observe(etype, tool_name)
             if sid and not session_id:
                 session_id = sid
             if human:
@@ -446,7 +531,9 @@ def _run_json_stream(
             break
         if not line:
             continue
-        sid, human = _parse_json_event(line)
+        sid, human, etype, tool_name = _parse_json_event(line)
+        if etype:
+            events.observe(etype, tool_name)
         if sid and not session_id:
             session_id = sid
         if human:
@@ -455,9 +542,18 @@ def _run_json_stream(
                 print(human, end="" if human.endswith("\n") else "\n", flush=True)
 
     code = proc.wait()
+    if kill_reason is None and events.incomplete:
+        stalled = True
+        kill_reason = "abnormal_stop"
+        print(
+            f"opencode exited with incomplete event "
+            f"(open_tool={events.open_tool or '-'} open_steps={events.open_steps})",
+            flush=True,
+        )
     print(
         f"--- end exit_code={code} session={session_id or '-'} "
-        f"stalled={stalled} kill_reason={kill_reason or '-'} ---",
+        f"stalled={stalled} kill_reason={kill_reason or '-'} "
+        f"last_event={events.last_event_type or '-'} ---",
         flush=True,
     )
     return OpenCodeRunResult(
@@ -466,6 +562,8 @@ def _run_json_stream(
         stdout_text="".join(text_chunks),
         stalled=stalled,
         kill_reason=kill_reason,
+        open_tool=events.open_tool,
+        last_event_type=events.last_event_type,
     )
 
 
@@ -482,23 +580,32 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _parse_json_event(line: str) -> tuple[str, str]:
-    """Return (session_id, human_text). human_text may be empty."""
+def _parse_json_event(line: str) -> tuple[str, str, str, str]:
+    """Return (session_id, human_text, event_type, tool_name)."""
     if not line.startswith("{"):
-        return "", ""
+        return "", "", "", ""
     try:
         ev = json.loads(line)
     except json.JSONDecodeError:
-        return "", ""
+        return "", "", "", ""
     sid = str(ev.get("sessionID") or "")
-    etype = ev.get("type") or ""
+    etype = str(ev.get("type") or "")
     part = ev.get("part") or {}
     if isinstance(part, dict):
         sid = sid or str(part.get("sessionID") or "")
+    tool_name = ""
     human = ""
     if etype == "text":
-        human = str((part or {}).get("text") or "")
-    elif etype in ("tool_use", "tool_call"):
-        name = (part or {}).get("name") or (part or {}).get("tool") or "tool"
-        human = f"→ {name}\n"
-    return sid, human
+        human = str((part or {}).get("text") or "") if isinstance(part, dict) else ""
+    elif etype in ("tool_use", "tool_call", "tool.start"):
+        if isinstance(part, dict):
+            tool_name = str(part.get("name") or part.get("tool") or "tool")
+        human = f"→ {tool_name or 'tool'}\n"
+    elif etype in ("tool_result", "tool_end", "tool.finish"):
+        if isinstance(part, dict):
+            tool_name = str(part.get("name") or part.get("tool") or "")
+    elif etype in ("step_start", "step.start"):
+        human = ""
+    elif etype in ("step_finish", "step.finish", "step_end"):
+        human = ""
+    return sid, human, etype, tool_name

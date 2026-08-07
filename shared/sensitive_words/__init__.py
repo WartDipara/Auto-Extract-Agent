@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,6 +10,61 @@ DEFAULT_PLACE_ALLOWLIST_FILE = _PACKAGE_DIR / "place_allowlist.txt"
 
 _HEADER_NAMES = frozenset({"name", "word", "text", "敏感词"})
 _MIN_WORD_LEN = 2
+
+# Keep political / regime-related terms only. Drop porn, violence, drugs, gambling,
+# and short game-common words (炸药 / 毒刺 / 現金 / 管理 / …) that cause false hits.
+_POLITICAL_KEEP_RE = re.compile(
+    r"(天安[门門]|中南海|六[四4]|六[\.．]?四|八九|学潮|學潮|民运|民運|"
+    r"法[轮輪]|轮功|輪功|大法|"
+    r"中共|共产|共產|共党|共黨|共匪|共铲|共鏟|退党|退黨|九评|九評|明慧|纪元|紀元|"
+    r"台独|台獨|藏独|藏獨|疆独|疆獨|港独|港獨|东突|東突|达赖|達賴|刘晓波|劉曉波|"
+    r"习近平|習近平|江泽民|江澤民|胡锦涛|胡錦濤|邓小平|鄧小平|毛泽东|毛澤東|"
+    r"温家宝|溫家寶|李克强|李克強|彭丽媛|彭麗媛|周永康|薄熙来|薄熙來|王岐山|李鹏|李鵬|"
+    r"赵紫阳|趙紫陽|胡耀邦|政变|政變|独裁|獨裁|专制|專制|暴政|维稳|維穩|"
+    r"宪章|憲章|学运|學運|平反|镇反|鎮反|反右|文革|文化大革命|政治风波|政治風波|"
+    r"8964|610|真善忍|大纪元|大紀元|自由门|自由門|"
+    r"民阵|民陣|占中|雨伞运动|雨傘運動|反送中|"
+    r"独立运动|獨立運動|民主运动|民主運動|"
+    r"打台湾|打台灣|解放台湾|解放台灣|台海)",
+)
+
+_POLITICAL_SHORT = frozenset(
+    {
+        "六四",
+        "台独",
+        "台獨",
+        "藏独",
+        "藏獨",
+        "疆独",
+        "疆獨",
+        "港独",
+        "港獨",
+        "中共",
+        "共匪",
+        "共党",
+        "共黨",
+        "退党",
+        "退黨",
+        "达赖",
+        "達賴",
+        "文革",
+        "民运",
+        "民運",
+        "学潮",
+        "學潮",
+        "学运",
+        "學運",
+        "暴政",
+        "维稳",
+        "維穩",
+        "九评",
+        "九評",
+        "明慧",
+        "东突",
+        "東突",
+        "64",
+    }
+)
 
 _cached_path: Path | None = None
 _cached_allow_path: Path | None = None
@@ -36,6 +92,10 @@ def _load_word_lines(path: Path) -> set[str]:
     return words
 
 
+def _is_political_word(word: str) -> bool:
+    return word in _POLITICAL_SHORT or bool(_POLITICAL_KEEP_RE.search(word))
+
+
 def load_place_allowlist(path: Path | None = None) -> frozenset[str]:
     target = Path(path) if path is not None else DEFAULT_PLACE_ALLOWLIST_FILE
     return frozenset(_load_word_lines(target))
@@ -51,7 +111,7 @@ def load_sensitive_words(path: Path | None = None) -> frozenset[str]:
         and _cached_allow_path == allow_path
     ):
         return _cached_words
-    words = _load_word_lines(target)
+    words = {w for w in _load_word_lines(target) if _is_political_word(w)}
     words -= _load_word_lines(allow_path)
     _cached_path = target
     _cached_allow_path = allow_path

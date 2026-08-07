@@ -81,7 +81,8 @@ def test_deadline_persist_keeps_agent_written_csv(eb, monkeypatch):
     calls: list[str] = []
 
     def fake_run(*, task_key, prompt, cwd, skill, force_new, print_live,
-                 stall_sec, stall_output_path, hard_timeout_sec, stop_path):
+                 stall_sec, stall_output_path, hard_timeout_sec, stop_path,
+                 idle_sec=None):
         phase_hint = "initial"
         if "半小时" in prompt:
             phase_hint = "stall_continue"

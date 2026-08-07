@@ -406,15 +406,31 @@ def invoke_opencode(
 
     stall_sec = float(config.OPENCODE_STALL_SEC)
     hard_timeout = float(config.AGENT_TIMEOUT_SEC)
+    wrapup_sec = float(getattr(config, "OPENCODE_WRAPUP_SEC", 600) or 600)
+    wrapup_idle_sec = float(getattr(config, "OPENCODE_WRAPUP_IDLE_SEC", 180) or 180)
     last_result = None
     stdout_parts: list[str] = []
     forced_decrypt_fail = False
 
     stop_path = layout["stop"]
 
-    def _run(phase: str, prompt: str, *, force_new: bool, skill: str | None, use_stall: bool):
+    def _run(
+        phase: str,
+        prompt: str,
+        *,
+        force_new: bool,
+        skill: str | None,
+        use_stall: bool,
+        wrap_up: bool = False,
+    ):
         nonlocal last_result
         print(f"opencode phase={phase}", flush=True)
+        if wrap_up:
+            print(
+                f"opencode wrap-up budget={int(wrapup_sec)}s "
+                f"idle={int(wrapup_idle_sec)}s",
+                flush=True,
+            )
         result = mgr.run(
             task_key=task_key,
             prompt=prompt,
@@ -424,7 +440,8 @@ def invoke_opencode(
             print_live=True,
             stall_sec=stall_sec if use_stall else None,
             stall_output_path=out_csv if use_stall else None,
-            hard_timeout_sec=hard_timeout,
+            hard_timeout_sec=wrapup_sec if wrap_up else hard_timeout,
+            idle_sec=wrapup_idle_sec if wrap_up else None,
             stop_path=stop_path,
         )
         last_result = result
@@ -434,6 +451,18 @@ def invoke_opencode(
         reason = getattr(result, "kill_reason", None)
         if reason in ("stop", "interrupt"):
             raise OpenCodeStopped(f"opencode {reason}")
+        if reason in ("idle", "abnormal_stop"):
+            print(
+                f"opencode phase={phase} stopped ({reason}"
+                f"{'; open_tool=' + result.open_tool if result.open_tool else ''})"
+                "; will resume if needed",
+                flush=True,
+            )
+        if wrap_up and reason == "hard_timeout":
+            print(
+                f"opencode wrap-up hard-cut after {int(wrapup_sec)}s",
+                flush=True,
+            )
         return result
 
     # --- segment 1: initial ---
@@ -451,8 +480,11 @@ def invoke_opencode(
         pass
     elif getattr(r1, "kill_reason", None) == "hard_timeout":
         write_decrypt_fail_csv(apk_name, reason="OpenCode 硬超时且未产出 tests.csv")
-    elif r1.stalled:
-        # This run hit OPENCODE_STALL_SEC with no content → one continue.
+    elif r1.stalled or getattr(r1, "kill_reason", None) in (
+        "idle",
+        "abnormal_stop",
+    ):
+        # Stall / idle / mid-chat stop → one continue.
         cont = build_opencode_resume_prompt("stall_continue", apk_name, snap)
         r2 = _run(
             "stall_continue",
@@ -465,16 +497,19 @@ def invoke_opencode(
             pass
         elif getattr(r2, "kill_reason", None) == "hard_timeout":
             write_decrypt_fail_csv(apk_name, reason="OpenCode 硬超时且未产出 tests.csv")
-        elif r2.stalled:
-            # Second stall budget ≈ 1h: nudge once to persist, then keep whatever
-            # valid tests.csv the agent wrote. Do NOT force-overwrite success.
+        elif r2.stalled or getattr(r2, "kill_reason", None) in (
+            "idle",
+            "abnormal_stop",
+        ):
+            # ~1h budget used → wrap-up only, hard-cut in 10 minutes.
             dump = build_opencode_resume_prompt("deadline_persist", apk_name, snap)
-            _run(
+            r3 = _run(
                 "deadline_persist",
                 dump,
                 force_new=False,
                 skill=None,
                 use_stall=False,
+                wrap_up=True,
             )
             if _opencode_tests_ok():
                 print(
@@ -483,9 +518,13 @@ def invoke_opencode(
                 )
             else:
                 forced_decrypt_fail = True
+                reason = getattr(r3, "kill_reason", None) or "no_csv"
                 write_decrypt_fail_csv(
                     apk_name,
-                    reason="已满一小时，催促落盘后仍无有效 tests.csv",
+                    reason=(
+                        f"收尾期截止（{int(wrapup_sec)}s）后仍无有效 tests.csv"
+                        f"（{reason}）"
+                    ),
                 )
         else:
             _resume_missing_output(mgr, apk_name, snap, task_key, _run)

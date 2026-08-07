@@ -117,7 +117,7 @@ def test_opencode_prompt_and_cmd():
         large_lines=config.CSV_LARGE_REVIEW_LINES,
     )
     assert "乱码" in large
-    assert "违禁" in large or "敏感" in large
+    assert "涉政" in large
     assert "350000" in large
     assert str(config.CSV_LARGE_REVIEW_LINES) in large
     assert config.ASSETS_MISSING_TEXT in prompt
@@ -231,11 +231,11 @@ def test_csv_quality():
     assert match_terminal_status(halluc) is None
     assert check_csv_quality(halluc) is not None
 
-    words = frozenset({"色情论坛", "一夜性网", "女神教"})
-    raw = "任务说明\n色情论坛\n正常文本\n一夜性网\n包含色情论坛的长句\n短行\n"
+    words = frozenset({"法轮功", "六四", "女神教"})
+    raw = "任务说明\n法轮功\n正常文本\n六四\n包含法轮功的长句\n短行\n"
     filtered, removed = filter_sensitive_lines(raw, words=words)
     assert removed == 2
-    assert filtered.splitlines() == ["任务说明", "正常文本", "包含色情论坛的长句", "短行"]
+    assert filtered.splitlines() == ["任务说明", "正常文本", "包含法轮功的长句", "短行"]
     hit = scan_sensitive_hits(raw, words=words)
     assert hit.hit_lines == 2
     assert hit.hit_lines < config.SENSITIVE_HIT_MIN
@@ -247,8 +247,11 @@ def test_csv_quality():
     nested_filtered, nested_removed = filter_sensitive_lines(nested, words=words)
     assert nested_removed == 1
     assert nested_filtered.splitlines() == ["[女神教] 大祭師", "女神教信徒"]
-    many = "\n".join(["色情论坛"] * config.SENSITIVE_HIT_MIN)
+    many = "\n".join(["法轮功"] * config.SENSITIVE_HIT_MIN)
     assert scan_sensitive_hits(many, words=words).hit_lines >= config.SENSITIVE_HIT_MIN
+    # 少量游戏常见词不应触发 quality_sensitive（需 >= SENSITIVE_HIT_MIN）
+    few_game = "\n".join(["炸药", "幼龍", "毒刺", "現金", "管理"] + [f"任务奖励说明{i}" for i in range(config.CSV_MIN_LINES)])
+    assert check_csv_quality(few_game) is None
     print("CSV_QUALITY_OK", flush=True)
 
 

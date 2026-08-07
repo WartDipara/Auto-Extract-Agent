@@ -28,11 +28,20 @@ def test_political_landmarks_still_sensitive():
         assert name in words, name
 
 
+def test_non_political_game_words_dropped():
+    from shared.sensitive_words import clear_sensitive_words_cache, load_sensitive_words
+
+    clear_sensitive_words_cache()
+    words = load_sensitive_words()
+    for name in ("炸药", "幼龍", "毒刺", "現金", "管理", "色情论坛", "冰毒", "手枪"):
+        assert name not in words, name
+
+
 def test_scan_keeps_places_filters_politics():
     from shared.sensitive_words import clear_sensitive_words_cache, scan_sensitive_hits
 
     clear_sensitive_words_cache()
-    text = "北京\n天安门\n武汉\n打台湾\n"
+    text = "北京\n天安门\n武汉\n打台湾\n炸药\n管理\n"
     hit = scan_sensitive_hits(text)
     assert hit.hit_lines == 2
     assert set(hit.samples) == {"天安门", "打台湾"}
@@ -41,5 +50,6 @@ def test_scan_keeps_places_filters_politics():
 if __name__ == "__main__":
     test_place_names_not_sensitive()
     test_political_landmarks_still_sensitive()
+    test_non_political_game_words_dropped()
     test_scan_keeps_places_filters_politics()
     print("PLACE_ALLOWLIST_OK")
