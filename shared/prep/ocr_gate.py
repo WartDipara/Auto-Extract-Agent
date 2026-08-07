@@ -9,7 +9,7 @@ from pathlib import Path
 import config
 from .adb_device import AdbDevice
 from .foreground_watch import ForegroundWatch
-from .gate_rules import content_fingerprint, try_local_action
+from .gate_rules import build_ocr_hints, content_fingerprint
 from .ocr_util import ocr_image, texts_joined
 from .screen_coord import resolve_screen_coord_space
 from small_agent import UiAgentSession, ping_model
@@ -22,7 +22,7 @@ def wait_until_entry_screen(
     adb: AdbDevice,
     *,
     package_name: str,
-    timeout_sec: float = 1200,
+    timeout_sec: float = 600,
     poll_sec: float = 3.0,
     agent_interval_sec: float = 10.0,
     foreground_poll_sec: float = 1.5,
@@ -32,9 +32,9 @@ def wait_until_entry_screen(
     """
     Navigate privacy/download until login/start/server entry.
 
-    Local OCR rules run first; LLM is only used when rules cannot decide.
-    Returns scene label, or crash / ai_unavailable / gate_error.
-    Raises TimeoutError on budget.
+    OCR + regex only produce advisory hints. All taps / done / wait decisions
+    are made by the LLM. Returns scene label, or crash / ai_unavailable.
+    Raises TimeoutError when budget (default 10 min) is exhausted.
     """
     if not adb.is_package_running(package_name):
         time.sleep(2.0)
@@ -65,8 +65,8 @@ def wait_until_entry_screen(
         relaunch_max = max(0, int(getattr(config, "PREP_GATE_RELAUNCH_MAX", 3)))
         cooldown = float(wait_cooldown_sec)
         print(
-            f"ocr gate watching (rules-first, llm_interval={agent_interval_sec}s, "
-            f"wait_cooldown={cooldown}s)...",
+            f"ocr gate watching (ai-decide, timeout={int(timeout_sec)}s, "
+            f"llm_interval={agent_interval_sec}s, wait_cooldown={cooldown}s)...",
             flush=True,
         )
 
@@ -177,8 +177,6 @@ def wait_until_entry_screen(
                 continue
 
             wait_for = agent_interval_sec - (now - last_decide_at)
-            # Interval only gates LLM falls-through; local rules always allowed.
-            # (Applied after OCR below when rules miss.)
 
             shot = shot_dir / f"gate_{n}.png"
             try:
@@ -193,34 +191,14 @@ def wait_until_entry_screen(
 
             blob = texts_joined(items)
             fp = content_fingerprint(items)
+            hints = build_ocr_hints(items)
             _log.info(
                 "ocr gate poll=%s text_sample=%s",
                 n,
                 blob[:240].replace("\n", " | "),
             )
-
-            local = try_local_action(adb, items)
-            if local is not None:
-                print(
-                    f"ocr gate rule: {local.kind}"
-                    f"{' ' + local.scene if local.scene else ''}"
-                    f"{' ' + local.text if local.text else ''} poll={n}",
-                    flush=True,
-                )
-                if local.kind == "done":
-                    scene = local.scene or "entry"
-                    print(f"ocr gate hit entry: {scene}", flush=True)
-                    return scene
-                last_fp = fp
-                last_decide_at = time.monotonic()
-                if local.kind == "wait":
-                    llm_cooldown_until = time.monotonic() + cooldown
-                elif local.kind == "tap":
-                    # Brief settle after tap before next OCR.
-                    time.sleep(min(poll_sec, 1.5))
-                else:
-                    time.sleep(poll_sec)
-                continue
+            if hints:
+                print(f"ocr gate {hints} poll={n}", flush=True)
 
             if fp == last_fp:
                 if n == 1 or n % 5 == 0:
@@ -238,7 +216,8 @@ def wait_until_entry_screen(
                 print("ocr gate: ai unavailable for undecided frame", flush=True)
                 return "ai_unavailable"
 
-            submit_note = note
+            note_parts = [p for p in (note, hints) if p]
+            submit_note = " | ".join(note_parts)
             note = ""
             decide_future = executor.submit(
                 agent.decide,

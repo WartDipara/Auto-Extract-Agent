@@ -3,28 +3,26 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 SYSTEM_PROMPT = """你是 Android 游戏启动引导助手。
-目标：处理启动隐私弹窗与资源下载/更新，直到登录、开始游戏或选服界面。
-每轮输入是编号 OCR 列表：id / text / x / y（坐标已对齐 adb tap）。
-工具（每轮只用恰好一个，调用后立即结束）：
-- tap_item(item_id)：点击对应 OCR 项
-- wait：下载中、动画中、OCR 过少/看不清
-- done(scene)：login | start_game | server_select | entry
-规则：禁止点「不同意/拒绝」；禁止登录后操作；不确定就 wait。
-更新完成需重启时点「确定/重启/知道了」。不要编造不存在的 id。"""
+目标：自行判断并推进界面，直到出现需要输入账号/密码的登录页，然后调用 done(scene=\"login\")。
+
+每轮给你的是当前截屏的 OCR 结果：屏幕上识别到的可见文字块列表。
+每条形如 [id] text='…' x=… y=…：
+- text：该文字块内容（按钮文案、标题、提示等）
+- x,y：该文字块中心点在屏幕上的坐标，已对齐 adb tap；tap_item(id) 即点这个位置
+- note/hints：正则旁注，仅供参考，以你看到的 OCR 为准
+
+每轮只用一个工具后立即结束：
+- tap_item(item_id)：点击对应文字块
+- wait：下载/加载/看不清时等待
+- done(scene)：到达登录页用 login；勿在登录前结束
+不要点「不同意/拒绝」；不要输入账号密码；不要编造 id。"""
 
 PING_PROMPT = "Reply with exactly one token: OK or pong. No other text."
 
 # Kept for tests / docs; bootstrap no longer sends this to the API.
-TASK_BOOTSTRAP = """工作说明（请记住，后续轮次只追加当前画面 OCR）：
-1. 每轮会给你编号 OCR 列表：id / text / x / y（坐标已对齐 adb tap）。
-2. 你的任务：同意隐私、推进资源下载；到达登录/开始游戏/选服时调用 done。
-3. 若出现「更新完成需手动重启」「请退出后重新启动」等提示，点击「确定/重启/知道了」即可；进程退出后由宿主重新拉起，你继续后续引导。
-4. 工具（每轮只用一个）：
-   - tap_item(item_id)：点击对应 OCR 项中心
-   - wait：下载中、动画中、OCR 过少/看不清时等待
-   - done(scene)：scene 只能是 login / start_game / server_select / entry
-5. 不要点「不同意」「拒绝」；不要编造不存在的 id。
-请简短确认你已理解（一句话即可，不要调用工具）。"""
+TASK_BOOTSTRAP = """推进到需要输入账号/密码的登录页后调用 done(scene=\"login\")。
+输入是截屏 OCR 文字块（text + 中心坐标）；tap_item 点对应 id。
+工具：tap_item / wait / done。不要点不同意；不要编造 id。"""
 
 
 def format_ocr_user_message(
@@ -33,7 +31,9 @@ def format_ocr_user_message(
     poll: int,
     note: str = "",
 ) -> str:
-    lines = [f"poll={poll} current screen OCR:"]
+    lines = [
+        f"poll={poll} 当前截屏 OCR（每条是屏幕上的一块可见文字及其中心坐标）：",
+    ]
     if note:
         lines.append(f"note: {note}")
     if not items:
@@ -44,5 +44,5 @@ def format_ocr_user_message(
             cx = int(getattr(item, "cx", 0) or 0)
             cy = int(getattr(item, "cy", 0) or 0)
             lines.append(f"[{i}] text={text!r} x={cx} y={cy}")
-    lines.append("Call exactly ONE tool now: tap_item / wait / done. Then stop.")
+    lines.append("Call exactly ONE tool: tap_item / wait / done. Then stop.")
     return "\n".join(lines)

@@ -79,11 +79,11 @@ DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_TIMEOUT_SEC = 300
 AAPT_PATH = ""
 ADB_CMD = "adb"
-PREP_GATE_TIMEOUT_SEC = 1200
+PREP_GATE_TIMEOUT_SEC = 600
 PREP_OCR_POLL_SEC = 3.0
-# LLM fallback interval (local rules ignore this and run every poll).
+# LLM decide interval between distinct frames.
 PREP_AGENT_INTERVAL_SEC = 10.0
-# After a wait (rule or LLM), suppress further LLM queries this long.
+# After LLM wait, suppress further queries this long.
 PREP_GATE_WAIT_COOLDOWN_SEC = 20.0
 # Poison inbox json: after this many unexpected process failures -> rejected_.
 INBOX_PROCESS_MAX_ATTEMPTS = 5

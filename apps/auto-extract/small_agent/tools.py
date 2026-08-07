@@ -69,13 +69,13 @@ def build_tools(session: FrameSession) -> list[Any]:
 
     @tool
     def done(scene: str) -> str:
-        """Entry screen reached. scene: login | start_game | server_select | entry."""
+        """Login (account/password) screen reached. Prefer scene=login."""
         blocked = _already_done()
         if blocked:
             return blocked
         scene_key = (scene or "").strip().lower()
         if scene_key not in _VALID_SCENES:
-            scene_key = "entry"
+            scene_key = "login"
         session.outcome = FrameOutcome(kind="done", scene=scene_key)
         return f"done scene={scene_key}"
 

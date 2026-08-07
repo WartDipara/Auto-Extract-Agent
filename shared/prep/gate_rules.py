@@ -1,15 +1,17 @@
-"""Local OCR rules for prep gate — prefer these over LLM when unambiguous."""
+"""OCR + regex recognition helpers for prep gate.
+
+These produce advisory hints only. They must never tap or declare entry done;
+the LLM owns all decisions.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
-from typing import Any, Protocol, Sequence
+from typing import Any, Sequence
 
 from shared.prep.ocr_util import find_tap_for_texts, texts_joined
 
-# Longer / more specific first so find_tap_for_texts prefers real buttons.
 _AGREE_NEEDLES = (
     "同意并继续",
     "同意并进入",
@@ -23,7 +25,24 @@ _AGREE_NEEDLES = (
 
 _DENY_MARKERS = ("不同意", "拒绝", "暂不")
 
-# (needle, scene) — short button-like labels only.
+_ENTRY_TITLE_BLOCK = (
+    "欢迎",
+    "温馨",
+    "协议",
+    "隐私",
+    "政策",
+    "服务条款",
+    "个人信息",
+)
+
+_PRIVACY_SCREEN_MARKERS = (
+    "温馨提示",
+    "隐私政策",
+    "用户服务协议",
+    "用户隐私政策",
+    "个人信息保护",
+)
+
 _ENTRY_NEEDLES: tuple[tuple[str, str], ...] = (
     ("进入游戏", "start_game"),
     ("开始游戏", "start_game"),
@@ -51,17 +70,6 @@ _DIGIT_RE = re.compile(r"\d+")
 _SPACE_RE = re.compile(r"\s+")
 
 
-class _TapDevice(Protocol):
-    def tap(self, x: int, y: int) -> None: ...
-
-
-@dataclass(frozen=True)
-class LocalGateAction:
-    kind: str  # tap | wait | done
-    scene: str = ""
-    text: str = ""
-
-
 def content_fingerprint(items: Sequence[Any]) -> str:
     """Fingerprint that ignores progress digits so 12%→13% does not re-query LLM."""
     parts: list[str] = []
@@ -76,30 +84,7 @@ def content_fingerprint(items: Sequence[Any]) -> str:
     return hashlib.sha1(blob.encode("utf-8", errors="replace")).hexdigest()
 
 
-def _short_button_hit(items: Sequence[Any], needle: str, *, max_len: int = 16) -> bool:
-    needle_l = needle.lower()
-    for item in items:
-        text = (getattr(item, "text", "") or "").strip()
-        if not text:
-            continue
-        text_l = text.lower()
-        if text_l == needle_l:
-            return True
-        if len(text) <= max_len and needle_l in text_l:
-            if text_l.startswith(needle_l) or text_l.endswith(needle_l):
-                return True
-    return False
-
-
-def match_entry_scene(items: Sequence[Any]) -> str | None:
-    for needle, scene in _ENTRY_NEEDLES:
-        if _short_button_hit(items, needle):
-            return scene
-    return None
-
-
 def _actionable_items(items: Sequence[Any]) -> list[Any]:
-    """Drop deny/reject labels so needle '同意' cannot match '不同意'."""
     out: list[Any] = []
     for item in items:
         text = (getattr(item, "text", "") or "").strip()
@@ -109,8 +94,42 @@ def _actionable_items(items: Sequence[Any]) -> list[Any]:
     return out
 
 
+def _entry_button_hit(items: Sequence[Any], needle: str) -> bool:
+    needle_l = needle.lower()
+    for item in items:
+        text = (getattr(item, "text", "") or "").strip()
+        if not text:
+            continue
+        if any(b in text for b in _ENTRY_TITLE_BLOCK):
+            continue
+        text_l = text.lower()
+        if text_l == needle_l:
+            return True
+        if len(text) <= len(needle) + 2 and needle_l in text_l:
+            if text_l.startswith(needle_l) or text_l.endswith(needle_l):
+                return True
+    return False
+
+
+def match_entry_scene(items: Sequence[Any]) -> str | None:
+    for needle, scene in _ENTRY_NEEDLES:
+        if _entry_button_hit(items, needle):
+            return scene
+    return None
+
+
+def looks_like_privacy_consent(items: Sequence[Any]) -> bool:
+    blob = texts_joined(list(items))
+    if any(m in blob for m in _PRIVACY_SCREEN_MARKERS):
+        return True
+    if any(m in blob for m in _DENY_MARKERS) and find_tap_for_texts(
+        _actionable_items(items), _AGREE_NEEDLES
+    ):
+        return True
+    return False
+
+
 def is_progress_screen(items: Sequence[Any]) -> bool:
-    """True when screen looks like download/update and has no clear action button."""
     blob = texts_joined(list(items))
     if not _PROGRESS_RE.search(blob):
         return False
@@ -127,35 +146,64 @@ def is_progress_screen(items: Sequence[Any]) -> bool:
     return True
 
 
-def try_local_action(adb: _TapDevice, items: Sequence[Any]) -> LocalGateAction | None:
-    """
-    Apply an unambiguous local action.
-    Returns LocalGateAction, or None when the frame should fall through to LLM.
-    """
-    item_list = list(items)
-    scene = match_entry_scene(item_list)
-    if scene:
-        return LocalGateAction(kind="done", scene=scene)
+def _item_ids_matching(items: Sequence[Any], needles: Sequence[str]) -> list[int]:
+    ids: list[int] = []
+    for i, item in enumerate(items):
+        text = (getattr(item, "text", "") or "").strip()
+        if not text:
+            continue
+        if any(m in text for m in _DENY_MARKERS):
+            continue
+        for needle in needles:
+            if text == needle or (len(text) <= 12 and needle in text):
+                ids.append(i)
+                break
+    return ids
 
-    actionable = _actionable_items(item_list)
-    short_buttons = [
+
+def build_ocr_hints(items: Sequence[Any]) -> str:
+    """
+    Advisory regex observations for the LLM.
+    Never executes taps or marks entry reached.
+    """
+    hints: list[str] = []
+    if looks_like_privacy_consent(items):
+        hints.append(
+            "privacy/consent dialog likely — prefer tap 同意; do NOT done yet"
+        )
+    agree_ids = _item_ids_matching(items, _AGREE_NEEDLES)
+    if agree_ids:
+        hints.append(f"possible agree button ids={agree_ids}")
+    deny_ids = [
         i
-        for i in actionable
-        if len((getattr(i, "text", "") or "").strip()) <= 10
+        for i, item in enumerate(items)
+        if any(m in (getattr(item, "text", "") or "") for m in _DENY_MARKERS)
     ]
-    blob = texts_joined(item_list)
+    if deny_ids:
+        hints.append(f"deny/reject labels ids={deny_ids} (do not tap)")
+
+    blob = texts_joined(list(items))
     if _RESTART_HINT.search(blob):
-        pt = find_tap_for_texts(short_buttons, _RESTART_NEEDLES)
-        if pt is not None:
-            adb.tap(*pt)
-            return LocalGateAction(kind="tap", text="restart_confirm")
+        restart_ids = _item_ids_matching(items, _RESTART_NEEDLES)
+        hints.append(
+            "update/restart prompt likely"
+            + (f"; confirm ids={restart_ids}" if restart_ids else "")
+        )
 
-    pt = find_tap_for_texts(actionable, _AGREE_NEEDLES)
-    if pt is not None:
-        adb.tap(*pt)
-        return LocalGateAction(kind="tap", text="agree")
+    if is_progress_screen(items):
+        hints.append("download/progress screen likely → wait")
 
-    if is_progress_screen(item_list):
-        return LocalGateAction(kind="wait", text="progress")
+    scene = match_entry_scene(items)
+    if scene:
+        hints.append(
+            f"possible entry match scene={scene} "
+            "(verify real button, not title like 欢迎进入游戏)"
+        )
+    elif any("进入游戏" in (getattr(item, "text", "") or "") for item in items):
+        hints.append(
+            "saw 进入游戏 inside longer text — likely title, not entry button"
+        )
 
-    return None
+    if not hints:
+        return ""
+    return "regex hints (advisory only): " + "; ".join(hints)
